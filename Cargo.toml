@@ -9,6 +9,7 @@ edition = "2024"
 [workspace.dependencies]
 rt-api = { path = "crates/rt-api" }
 rt-audio = { path = "crates/rt-audio" }
+rt-player = { path = "crates/rt-player" }
 rt-stream = { path = "crates/rt-stream" }
 rt-ui = { path = "crates/rt-ui" }
 

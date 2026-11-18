@@ -3,7 +3,7 @@
 
 use rt_api::{ApiClient, Track};
 use rt_stream::{StreamResolver, VideoId, YtDlpResolver};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub fn run(args: &[String]) {
     match (
@@ -12,8 +12,12 @@ pub fn run(args: &[String]) {
     ) {
         (Some("search"), Some(query)) => search(query),
         (Some("stream"), Some(video_id)) => stream(video_id),
+        (Some("play"), Some(video_id)) => play(video_id),
+        (Some("fetchmt"), Some(video_id)) => fetch_mt(video_id),
         _ => {
-            eprintln!("usage: rustytube probe search <query> | rustytube probe stream <video_id>");
+            eprintln!(
+                "usage: rustytube probe search <query> | probe stream <video_id> | probe play <video_id>"
+            );
             std::process::exit(2);
         }
     }
@@ -99,5 +103,121 @@ fn stream(video_id: &str) {
         let ftyp = bytes.len() >= 8 && &bytes[4..8] == b"ftyp";
         println!("fetched_bytes: {}", bytes.len());
         println!("container_is_m4a_ftyp: {ftyp}");
+    });
+}
+
+/// Headless end-to-end: engine thread, loader, feeder, real output device.
+fn play(video_id: &str) {
+    let id = match VideoId::parse(video_id) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
+    let track = Track {
+        video_id: id.as_str().to_string(),
+        title: "probe track".into(),
+        artist: "probe".into(),
+        album: None,
+        duration: "0:00".into(),
+    };
+    let handle = match rt_player::PlayerHandle::spawn() {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("player spawn failed: {e}");
+            std::process::exit(1);
+        }
+    };
+    let started = Instant::now();
+    handle.send(rt_player::Cmd::PlayQueue(vec![track], 0));
+
+    // Wait for audio to actually start (Loading -> Playing transition).
+    let mut playing_at: Option<Duration> = None;
+    let mut last_report = Instant::now();
+    while started.elapsed() < Duration::from_secs(30) {
+        let s = handle.status();
+        if last_report.elapsed() >= Duration::from_secs(2) {
+            eprintln!(
+                "t={:.0}s transport={:?} error={:?}",
+                started.elapsed().as_secs(),
+                s.transport,
+                s.error
+            );
+            last_report = Instant::now();
+        }
+        if s.transport == rt_player::TransportState::Playing && playing_at.is_none() {
+            playing_at = Some(started.elapsed());
+            println!("click_to_audio_ms: {}", started.elapsed().as_millis());
+            break;
+        }
+        if s.transport == rt_player::TransportState::Stopped
+            && let Some(err) = s.error
+        {
+            eprintln!("engine error: {err}");
+            std::process::exit(1);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    if playing_at.is_none() {
+        eprintln!("never reached Playing within 30s");
+        std::process::exit(1);
+    }
+
+    // Let it play, then check position advanced and no underruns.
+    std::thread::sleep(Duration::from_secs(8));
+    let s = handle.status();
+    println!(
+        "position_secs: {:.1} / {:.1}  underruns: {}",
+        s.position_secs, s.duration_secs, s.underruns
+    );
+    handle.send(rt_player::Cmd::Shutdown);
+    let ok = s.position_secs > 5.0 && s.underruns == 0;
+    println!("{}", if ok { "PASS" } else { "FAIL" });
+    if !ok {
+        std::process::exit(1);
+    }
+}
+
+/// Isolation: resolve + fetch on a multi-thread runtime, engine-free.
+fn fetch_mt(video_id: &str) {
+    let id = match VideoId::parse(video_id) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    rt.block_on(async {
+        let resolver = YtDlpResolver;
+        let started = Instant::now();
+        let resolved = match resolver.resolve(&id).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("resolve failed: {e}");
+                std::process::exit(1);
+            }
+        };
+        eprintln!("resolved in {} ms", started.elapsed().as_millis());
+        let fetch_started = Instant::now();
+        match rt_stream::fetch_full(&resolved).await {
+            Ok(b) => println!(
+                "fetched {} bytes in {} ms",
+                b.len(),
+                fetch_started.elapsed().as_millis()
+            ),
+            Err(e) => {
+                eprintln!(
+                    "fetch failed after {} ms: {e}",
+                    fetch_started.elapsed().as_millis()
+                );
+                std::process::exit(1);
+            }
+        }
     });
 }

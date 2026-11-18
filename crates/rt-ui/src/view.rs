@@ -1,11 +1,12 @@
-//! The three-column shell: left nav, center stage with the search bar,
-//! right tabbed panel, playback bar across the bottom. Dark theme per the
-//! PRD (#000000 to #121212, high-contrast text).
+//! The three-column shell: left nav, center stage with the search bar and
+//! results, right tabbed panel, playback bar across the bottom. Dark theme
+//! per the PRD (#000000 to #121212, high-contrast text).
 
 use crate::{Message, RightTab, RustyTube, Section};
 
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
-use iced::{Alignment, Color, Element, Fill, Length, Padding};
+use iced::{Alignment, Color, Element, Fill, Length};
+use rt_player::TransportState;
 
 pub const BG_ROOT: Color = Color::from_rgb(0.0, 0.0, 0.0);
 pub const BG_PANEL: Color = Color::from_rgb(0.07, 0.07, 0.07); // #121212
@@ -85,27 +86,80 @@ fn topbar(app: &RustyTube) -> Element<'static, Message> {
         .into()
 }
 
+fn result_row(
+    i: usize,
+    title: &str,
+    artist: &str,
+    duration: &str,
+) -> button::Button<'static, Message> {
+    button(
+        row![
+            text(format!("{}. {}", i + 1, title)).color(FG),
+            text(artist.to_string()).color(FG_DIM),
+            text(duration.to_string()).color(FG_DIM),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center),
+    )
+    .on_press(Message::TrackClicked(i))
+    .width(Fill)
+    .style(move |_t, status| button::Style {
+        background: Some(
+            if status == button::Status::Hovered {
+                BG_HOVER
+            } else {
+                Color::TRANSPARENT
+            }
+            .into(),
+        ),
+        text_color: FG,
+        ..button::Style::default()
+    })
+}
+
 fn stage(app: &RustyTube) -> Element<'static, Message> {
     let headline = match app.section {
         Section::Home => "Home",
         Section::Explore => "Explore",
         Section::Library => "Library",
     };
-    let detail = if app.search_query.is_empty() {
-        format!("Transport: {:?}", app.transport)
-    } else {
-        format!("Query queued: {}", app.search_query)
-    };
-    column![
-        text(headline).size(28).color(FG),
-        text(detail).color(FG_DIM)
-    ]
-    .spacing(8)
-    .padding(24)
-    .align_x(Alignment::Center)
-    .width(Fill)
-    .height(Fill)
-    .into()
+
+    let mut body = column![].spacing(4).padding(16);
+    body = body.push(text(headline).size(24).color(FG));
+
+    match &app.status.transport {
+        TransportState::Loading(what) => {
+            body = body.push(text(format!("Loading: {what}…")).color(ACCENT));
+        }
+        TransportState::Playing | TransportState::Paused => {
+            if let Some(track) = &app.status.current {
+                body = body.push(
+                    text(format!("{} — {}", track.title, track.artist))
+                        .size(16)
+                        .color(FG),
+                );
+            }
+        }
+        TransportState::Stopped => {
+            if app.results.is_empty() {
+                body = body.push(text("Search to fill this stage").color(FG_DIM));
+            }
+        }
+    }
+    if let Some(err) = &app.status.error {
+        body = body.push(text(format!("error: {err}")).color(ACCENT));
+    }
+
+    if !app.results.is_empty() {
+        let rows = app
+            .results
+            .iter()
+            .enumerate()
+            .map(|(i, t)| result_row(i, &t.title, &t.artist, &t.duration).into());
+        body = body.push(scrollable(column(rows).spacing(2)).height(Fill));
+    }
+
+    body.width(Fill).height(Fill).into()
 }
 
 fn tab_button<'a>(label: &'a str, active: bool, msg: Message) -> button::Button<'a, Message> {
@@ -139,21 +193,35 @@ fn right_panel(app: &RustyTube) -> Element<'static, Message> {
     .spacing(4)
     .padding(8);
 
-    let body = text(match app.tab {
-        RightTab::UpNext => "Queue is empty",
-        RightTab::Lyrics => "No lyrics loaded",
-        RightTab::Related => "Nothing related yet",
-    })
-    .color(FG_DIM);
+    let body = match app.tab {
+        RightTab::UpNext => text(format!(
+            "Queue: {} tracks (index {})",
+            app.status.queue_len, app.status.queue_index
+        ))
+        .color(FG_DIM),
+        RightTab::Lyrics => text("No lyrics loaded").color(FG_DIM),
+        RightTab::Related => text("Nothing related yet").color(FG_DIM),
+    };
 
     column![tabs, body].spacing(8).width(Fill).into()
 }
 
+fn mmss(secs: f64) -> String {
+    let total = secs.max(0.0) as u64;
+    format!("{}:{:02}", total / 60, total % 60)
+}
+
 fn playback_bar(app: &RustyTube) -> Element<'static, Message> {
-    let play_label = match app.transport {
-        crate::Transport::Playing => "Pause",
-        _ => "Play",
+    let playing = app.status.transport == TransportState::Playing;
+    let paused = app.status.transport == TransportState::Paused;
+    let play_label = if playing {
+        "Pause"
+    } else if paused {
+        "Resume"
+    } else {
+        "Play"
     };
+
     let controls = row![
         button(text("Prev").color(FG)).on_press(Message::PrevPressed),
         button(text(play_label).color(FG)).on_press(Message::PlayPressed),
@@ -179,14 +247,27 @@ fn playback_bar(app: &RustyTube) -> Element<'static, Message> {
     .spacing(8)
     .align_y(Alignment::Center);
 
+    let duration = app.status.duration_secs;
+    let position = app.status.position_secs.min(duration.max(0.001));
+    let frac = if duration > 0.0 {
+        (position / duration) as f32
+    } else {
+        0.0
+    };
+    let seek = iced::widget::slider(0.0..=1.0, frac, Message::SeekChanged);
     let volume = iced::widget::slider(0.0..=1.0, app.volume, Message::VolumeChanged);
 
-    row![controls, text("0:00 / 0:00").color(FG_DIM), volume]
-        .spacing(12)
-        .padding(10)
-        .align_y(Alignment::Center)
-        .width(Fill)
-        .into()
+    row![
+        controls,
+        text(format!("{} / {}", mmss(position), mmss(duration))).color(FG_DIM),
+        seek,
+        volume,
+    ]
+    .spacing(12)
+    .padding(10)
+    .align_y(Alignment::Center)
+    .width(Fill)
+    .into()
 }
 
 pub fn view(app: &RustyTube) -> Element<'static, Message> {
@@ -203,6 +284,5 @@ pub fn view(app: &RustyTube) -> Element<'static, Message> {
     column![body, playback_bar(app)]
         .width(Fill)
         .height(Fill)
-        .padding(Padding::default())
         .into()
 }

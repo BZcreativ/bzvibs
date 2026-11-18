@@ -1,0 +1,11 @@
+[package]
+name = "rt-player"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rt-api.workspace = true
+rt-audio.workspace = true
+rt-stream.workspace = true
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

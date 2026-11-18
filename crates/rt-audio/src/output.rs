@@ -29,6 +29,10 @@ pub enum OutputError {
 #[derive(Debug, Default)]
 struct Shared {
     paused: AtomicBool,
+    /// Discard everything currently buffered. Set from any thread; the
+    /// callback honors it before anything else so a paused ring can still
+    /// be drained.
+    flush: AtomicBool,
     /// 0..=1000, applied in the callback before the EQ.
     volume_milli: AtomicU32,
     underruns: AtomicU64,
@@ -40,9 +44,15 @@ fn fill(
     consumer: &mut rtrb::Consumer<f32>,
     eq: &mut Eq8,
     paused: bool,
+    flush: bool,
     volume: f32,
     underruns: &AtomicU64,
 ) {
+    if flush {
+        while consumer.pop().is_ok() {}
+        data.fill(0.0);
+        return;
+    }
     if paused {
         data.fill(0.0);
         return;
@@ -109,6 +119,7 @@ impl Player {
                     &mut consumer,
                     &mut eq,
                     paused,
+                    shared_cb.flush.swap(false, Ordering::Relaxed),
                     volume,
                     &shared_cb.underruns,
                 );
@@ -131,6 +142,18 @@ impl Player {
     pub fn start(&self) -> Result<(), OutputError> {
         self.stream.play()?;
         Ok(())
+    }
+
+    /// Ask the callback to discard everything currently buffered. Takes
+    /// effect on the next callback, including while paused.
+    pub fn request_flush(&self) {
+        self.shared.flush.store(true, Ordering::Relaxed);
+    }
+
+    /// True while a requested flush has not been consumed by the callback
+    /// yet. Producers wait for this to clear before pushing new samples.
+    pub fn flush_pending(&self) -> bool {
+        self.shared.flush.load(Ordering::Relaxed)
     }
 
     pub fn spec(&self) -> DeviceSpec {
@@ -233,7 +256,7 @@ mod tests {
         let mut eq = eq_mono_44k();
         let underruns = AtomicU64::new(0);
         let mut out = [0.0f32; 8];
-        fill(&mut out, &mut cons, &mut eq, false, 1.0, &underruns);
+        fill(&mut out, &mut cons, &mut eq, false, false, 1.0, &underruns);
         // The flat cascade is transparent to float precision, not bit-exact.
         for (got, want) in out.iter().zip(1..=8u32) {
             assert!((got - want as f32).abs() < 1e-4, "got {got}, want {want}");
@@ -243,7 +266,7 @@ mod tests {
             assert!(prod.push(v as f32).is_ok());
         }
         let mut out = [0.0f32; 4];
-        fill(&mut out, &mut cons, &mut eq, false, 1.0, &underruns);
+        fill(&mut out, &mut cons, &mut eq, false, false, 1.0, &underruns);
         for (got, want) in out.iter().zip(9..=12u32) {
             assert!((got - want as f32).abs() < 1e-4, "got {got}, want {want}");
         }
@@ -259,12 +282,12 @@ mod tests {
         let mut eq = eq_mono_44k();
         let underruns = AtomicU64::new(0);
         let mut out = [0.5f32; 4];
-        fill(&mut out, &mut cons, &mut eq, true, 1.0, &underruns);
+        fill(&mut out, &mut cons, &mut eq, true, false, 1.0, &underruns);
         assert_eq!(out, [0.0; 4]);
         assert_eq!(underruns.load(Ordering::Relaxed), 0);
         // Samples are still there.
         let mut out = [0.0f32; 4];
-        fill(&mut out, &mut cons, &mut eq, false, 1.0, &underruns);
+        fill(&mut out, &mut cons, &mut eq, false, false, 1.0, &underruns);
         for (got, want) in out.iter().zip(1..=4u32) {
             assert!((got - want as f32).abs() < 1e-4, "got {got}, want {want}");
         }
@@ -276,9 +299,28 @@ mod tests {
         let mut eq = eq_mono_44k();
         let underruns = AtomicU64::new(0);
         let mut out = [0.0f32; 4];
-        fill(&mut out, &mut cons, &mut eq, false, 0.5, &underruns);
+        fill(&mut out, &mut cons, &mut eq, false, false, 0.5, &underruns);
         assert_eq!(out, [0.0; 4]);
         assert_eq!(underruns.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn flush_discards_buffered_samples_even_while_paused() {
+        let (mut prod, mut cons) = rtrb::RingBuffer::new(8);
+        for v in 1..=4u32 {
+            prod.push(v as f32).ok();
+        }
+        let mut eq = eq_mono_44k();
+        let underruns = AtomicU64::new(0);
+        let mut out = [0.5f32; 4];
+        fill(&mut out, &mut cons, &mut eq, true, true, 1.0, &underruns);
+        assert_eq!(out, [0.0; 4]);
+        assert_eq!(underruns.load(Ordering::Relaxed), 0);
+        // The ring is now empty: a subsequent paused read still sees silence
+        // and a resumed read starves (counted once) rather than replaying.
+        let mut out = [0.0f32; 2];
+        fill(&mut out, &mut cons, &mut eq, false, false, 1.0, &underruns);
+        assert_eq!(out, [0.0, 0.0]);
     }
 
     #[test]
