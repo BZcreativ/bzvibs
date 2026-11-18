@@ -59,8 +59,13 @@ fn sidebar(app: &RustyTube) -> Element<'static, Message> {
     .spacing(8)
     .align_y(Alignment::Center);
 
-    let nav = ["Home", "Explore", "Library"];
-    let sections = [Section::Home, Section::Explore, Section::Library];
+    let nav = ["Home", "Explore", "Library", "Equalizer"];
+    let sections = [
+        Section::Home,
+        Section::Explore,
+        Section::Library,
+        Section::Equalizer,
+    ];
     let mut nav_col = column![].spacing(4);
     for (label, section) in nav.iter().zip(sections) {
         let active = app.section == section;
@@ -235,6 +240,9 @@ fn visualizer_card(app: &RustyTube) -> Element<'static, Message> {
 
 fn stage(app: &RustyTube) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
+    if app.section == Section::Equalizer {
+        return eq_stage(app);
+    }
     let mut col = column![mode_pills(app), visualizer_card(app)]
         .spacing(14)
         .padding(16)
@@ -255,6 +263,130 @@ fn stage(app: &RustyTube) -> Element<'static, Message> {
         col = col.push(text(format!("error: {err}")).size(11).color(p.accent));
     }
     col.into()
+}
+
+// ---------- equalizer stage ----------
+
+fn eq_preset_chip(
+    p: &'static Palette,
+    label: String,
+    active: bool,
+    msg: Message,
+) -> button::Button<'static, Message> {
+    button(text(label).size(11))
+        .on_press(msg)
+        .padding([4, 12])
+        .style(move |_t, _s| button::Style {
+            background: Some(if active {
+                Background::Color(p.accent)
+            } else {
+                Background::Color(p.bg_card)
+            }),
+            border: pill_border(Color::TRANSPARENT),
+            text_color: if active { on_accent(p) } else { p.text_dim },
+            ..button::Style::default()
+        })
+}
+
+fn eq_stage(app: &RustyTube) -> Element<'static, Message> {
+    let p = theme::at(app.theme_index);
+
+    let eq_enabled = app.eq.enabled;
+    let header = row![
+        text("Equalizer").size(22).color(p.text),
+        text(app.eq.preset_name.clone()).size(12).color(p.accent),
+        button(text(if eq_enabled { "EQ on" } else { "EQ bypassed" }).size(11))
+            .on_press(Message::EqBypassToggled)
+            .padding([4, 12])
+            .style(move |_t, _s| button::Style {
+                background: Some(if eq_enabled {
+                    Background::Color(p.bg_card_active)
+                } else {
+                    Background::Color(p.bg_card)
+                }),
+                border: pill_border(p.accent),
+                text_color: p.text,
+                ..button::Style::default()
+            }),
+    ]
+    .spacing(12)
+    .align_y(Alignment::Center);
+
+    let mut presets = row![].spacing(6);
+    for (i, preset) in rt_config::builtin_presets().iter().enumerate() {
+        let active = app.eq.preset_name == preset.name;
+        presets = presets.push(eq_preset_chip(
+            p,
+            preset.name.clone(),
+            active,
+            Message::EqBuiltinSelected(i),
+        ));
+    }
+    for (i, preset) in app.eq.user_presets.iter().enumerate() {
+        let active = app.eq.preset_name == preset.name;
+        presets = presets.push(eq_preset_chip(
+            p,
+            preset.name.clone(),
+            active,
+            Message::EqUserSelected(i),
+        ));
+    }
+
+    let save_name = app.eq.save_name.clone();
+    let save_row = row![
+        text_input("preset name", &save_name)
+            .on_input(Message::EqNameChanged)
+            .size(12)
+            .padding([4, 10])
+            .style(move |_t, _s| text_input::Style {
+                background: Color::from_rgba(0.0, 0.0, 0.0, 0.35).into(),
+                border: pill_border(p.bg_card_active),
+                icon: p.text_dim,
+                placeholder: p.text_dim,
+                value: p.text,
+                selection: p.accent,
+            })
+            .width(Length::Fixed(180.0)),
+        button(text("Save").size(11))
+            .on_press(Message::EqSavePressed)
+            .padding([4, 12])
+            .style(move |_t, _s| button::Style {
+                background: Some(accent_gradient(p)),
+                border: pill_border(Color::TRANSPARENT),
+                text_color: on_accent(p),
+                ..button::Style::default()
+            }),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+
+    let mut sliders = column![].spacing(8).padding([4, 0]);
+    for i in 0..8 {
+        let label = rt_config::band_label(i);
+        let value = app.eq.gains_db[i];
+        let row_i = row![
+            text(label)
+                .size(11)
+                .color(p.text_dim)
+                .width(Length::Fixed(64.0)),
+            accent_slider(p, -12.0..=12.0, value, move |v| {
+                Message::EqGainChanged(i, v)
+            }),
+            text(format!("{value:+.1} dB"))
+                .size(11)
+                .color(p.text)
+                .width(Length::Fixed(64.0)),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
+        sliders = sliders.push(row_i);
+    }
+
+    column![header, presets, save_row, sliders]
+        .spacing(14)
+        .padding(24)
+        .width(Fill)
+        .into()
 }
 
 // ---------- right panel ----------
@@ -418,12 +550,15 @@ fn round_button(
         })
 }
 
-fn accent_slider(
+fn accent_slider<F>(
     p: &'static Palette,
     range: std::ops::RangeInclusive<f32>,
     value: f32,
-    msg: fn(f32) -> Message,
-) -> slider::Slider<'static, f32, Message> {
+    msg: F,
+) -> slider::Slider<'static, f32, Message>
+where
+    F: Fn(f32) -> Message + 'static,
+{
     slider(range, value, msg).style(move |_t, _s| slider::Style {
         rail: Rail {
             backgrounds: (

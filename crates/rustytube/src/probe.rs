@@ -171,8 +171,30 @@ fn play(video_id: &str) {
         "position_secs: {:.1} / {:.1}  underruns: {}",
         s.position_secs, s.duration_secs, s.underruns
     );
+
+    // EQ live box: flip gains mid-playback; the engine must swap
+    // coefficients without a blip (underruns stay 0, position keeps
+    // advancing), then flip back through bypass.
+    let eq = handle.eq().cloned();
+    let pos_before = s.position_secs;
+    if let Some(eq) = eq {
+        let mut gains = [0.0f32; 8];
+        gains[3] = 6.0; // 1 kHz, the PRD's mid-body band
+        eq.set_gains_db(gains);
+        std::thread::sleep(Duration::from_secs(3));
+        eq.set_gains_db([0.0; 8]); // bypass-equivalent flat
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    let s2 = handle.status();
+    println!(
+        "after_eq position_secs: {:.1}  underruns: {}",
+        s2.position_secs, s2.underruns
+    );
     handle.send(rt_player::Cmd::Shutdown);
-    let ok = s.position_secs > 5.0 && s.underruns == 0;
+    let ok = s.position_secs > 5.0
+        && s.underruns == 0
+        && s2.position_secs > pos_before
+        && s2.underruns == 0;
     println!("{}", if ok { "PASS" } else { "FAIL" });
     if !ok {
         std::process::exit(1);

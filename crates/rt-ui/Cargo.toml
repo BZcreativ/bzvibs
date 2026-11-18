@@ -6,4 +6,5 @@ edition.workspace = true
 [dependencies]
 iced = { version = "0.14", features = ["tiny-skia", "tokio"] }
 rt-api.workspace = true
+rt-config.workspace = true
 rt-player.workspace = true

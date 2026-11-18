@@ -6,6 +6,7 @@ pub enum Section {
     Home,
     Explore,
     Library,
+    Equalizer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

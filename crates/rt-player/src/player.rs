@@ -81,6 +81,9 @@ enum Internal {
 pub struct PlayerHandle {
     tx: Sender<Cmd>,
     status: Arc<Mutex<Status>>,
+    /// Clone of the engine's EQ handle, handed back during spawn; None only
+    /// when the output device failed to open before the handshake.
+    eq: Option<rt_audio::EqHandle>,
 }
 
 impl PlayerHandle {
@@ -88,11 +91,21 @@ impl PlayerHandle {
         let (tx, rx) = std::sync::mpsc::channel::<Cmd>();
         let status = Arc::new(Mutex::new(Status::default()));
         let status_thread = status.clone();
+        let (boot_tx, boot_rx) = std::sync::mpsc::channel::<Option<rt_audio::EqHandle>>();
         std::thread::Builder::new()
             .name("rt-player".into())
-            .spawn(move || engine(rx, status_thread))
+            .spawn(move || engine(rx, status_thread, boot_tx))
             .map_err(|e| format!("player thread spawn: {e}"))?;
-        Ok(PlayerHandle { tx, status })
+        let eq = boot_rx
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|e| format!("engine boot handshake: {e}"))?;
+        Ok(PlayerHandle { tx, status, eq })
+    }
+
+    /// Live EQ control: store new gains from any thread; the audio callback
+    /// picks them up on its next pass (lock-free, no glitch).
+    pub fn eq(&self) -> Option<&rt_audio::EqHandle> {
+        self.eq.as_ref()
     }
 
     pub fn status(&self) -> Status {
@@ -146,18 +159,20 @@ impl Feeder {
     }
 }
 
-fn engine(rx: Receiver<Cmd>, status: Arc<Mutex<Status>>) {
+fn engine(rx: Receiver<Cmd>, status: Arc<Mutex<Status>>, boot: Sender<Option<rt_audio::EqHandle>>) {
     let mut player = match Player::open() {
         Ok(p) => p,
         Err(e) => {
             if let Ok(mut s) = status.lock() {
                 s.error = Some(format!("output device: {e}"));
             }
+            let _ = boot.send(None);
             return;
         }
     };
     let device = player.spec();
     let _ = player.start();
+    let _ = boot.send(Some(player.eq_handle()));
 
     let (itx, irx) = std::sync::mpsc::channel::<Internal>();
     // Loader thread with a current-thread runtime: resolve (yt-dlp child) +

@@ -3485,6 +3485,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rt-config"
+version = "0.1.0"
+dependencies = [
+ "rt-audio",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "rt-player"
 version = "0.1.0"
 dependencies = [
@@ -3512,6 +3522,7 @@ version = "0.1.0"
 dependencies = [
  "iced",
  "rt-api",
+ "rt-config",
  "rt-player",
 ]
 

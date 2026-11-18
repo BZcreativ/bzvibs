@@ -60,7 +60,37 @@ pub enum Message {
     VolumeChanged(f32),
     SeekChanged(f32),
     ThemeCycled,
+    EqGainChanged(usize, f32),
+    EqBuiltinSelected(usize),
+    EqUserSelected(usize),
+    EqBypassToggled,
+    EqNameChanged(String),
+    EqSavePressed,
+    EqUserPresetsLoaded(Vec<rt_config::Preset>),
     Noop,
+}
+
+/// UI-side EQ state. The engine holds the live truth; this mirrors what the
+/// sliders show and remembers gains while bypassed.
+#[derive(Debug, Clone)]
+pub struct EqUiState {
+    pub enabled: bool,
+    pub gains_db: [f32; 8],
+    pub preset_name: String,
+    pub user_presets: Vec<rt_config::Preset>,
+    pub save_name: String,
+}
+
+impl Default for EqUiState {
+    fn default() -> Self {
+        EqUiState {
+            enabled: true,
+            gains_db: [0.0; 8],
+            preset_name: "Flat".into(),
+            user_presets: Vec::new(),
+            save_name: String::new(),
+        }
+    }
 }
 
 pub struct RustyTube {
@@ -73,6 +103,7 @@ pub struct RustyTube {
     pub repeat: Repeat,
     pub volume: f32,
     pub theme_index: usize,
+    pub eq: EqUiState,
     pub player: Option<PlayerHandle>,
     pub api: Option<Arc<ApiClient>>,
 }
@@ -80,7 +111,12 @@ pub struct RustyTube {
 impl Default for RustyTube {
     fn default() -> Self {
         RustyTube {
-            section: Section::Home,
+            section: match std::env::var("RT_SECTION").as_deref() {
+                Ok("equalizer") => Section::Equalizer,
+                Ok("explore") => Section::Explore,
+                Ok("library") => Section::Library,
+                _ => Section::Home,
+            },
             tab: RightTab::UpNext,
             search_query: String::new(),
             results: Vec::new(),
@@ -93,6 +129,7 @@ impl Default for RustyTube {
                 .and_then(|v| v.parse::<usize>().ok())
                 .map(|i| i % theme::THEMES.len())
                 .unwrap_or(0),
+            eq: EqUiState::default(),
             player: PlayerHandle::spawn().ok(),
             api: ApiClient::new().ok().map(Arc::new),
         }
@@ -114,8 +151,12 @@ impl RustyTube {
     pub fn boot() -> (RustyTube, Task<Message>) {
         let mut app = RustyTube::new();
         app.search_query = DEFAULT_QUERY.to_string();
-        let task = app.update(Message::SearchSubmitted);
-        (app, task)
+        let search = app.update(Message::SearchSubmitted);
+        let presets = Task::perform(
+            async { rt_config::list_user() },
+            Message::EqUserPresetsLoaded,
+        );
+        (app, Task::batch([search, presets]))
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -137,8 +178,10 @@ impl RustyTube {
                 );
             }
             Message::SearchDone(Ok(tracks)) => {
+                // Results land in the queue panel; the section stays where
+                // the user is (and the boot search must not stomp an
+                // RT_SECTION override).
                 self.results = tracks;
-                self.section = Section::Explore;
             }
             Message::SearchDone(Err(e)) => {
                 self.status.error = Some(format!("search: {e}"));
@@ -197,9 +240,67 @@ impl RustyTube {
             Message::ThemeCycled => {
                 self.theme_index = (self.theme_index + 1) % theme::THEMES.len();
             }
+            Message::EqGainChanged(i, v) => {
+                if i < 8 {
+                    self.eq.gains_db[i] = v.clamp(-12.0, 12.0);
+                    self.eq.preset_name = "Custom".into();
+                    self.push_eq();
+                }
+            }
+            Message::EqBuiltinSelected(i) => {
+                let presets = rt_config::builtin_presets();
+                if let Some(preset) = presets.get(i) {
+                    self.eq.gains_db = preset.gains;
+                    self.eq.preset_name = preset.name.clone();
+                    self.push_eq();
+                }
+            }
+            Message::EqUserSelected(i) => {
+                if let Some(preset) = self.eq.user_presets.get(i) {
+                    self.eq.gains_db = preset.gains;
+                    self.eq.preset_name = preset.name.clone();
+                    self.push_eq();
+                }
+            }
+            Message::EqBypassToggled => {
+                self.eq.enabled = !self.eq.enabled;
+                self.push_eq();
+            }
+            Message::EqNameChanged(s) => self.eq.save_name = s,
+            Message::EqUserPresetsLoaded(ps) => self.eq.user_presets = ps,
+            Message::EqSavePressed => {
+                let name = if self.eq.save_name.trim().is_empty() {
+                    "Custom".to_string()
+                } else {
+                    self.eq.save_name.trim().to_string()
+                };
+                let preset = rt_config::Preset {
+                    name,
+                    gains: self.eq.gains_db,
+                };
+                match rt_config::save(&preset) {
+                    Ok(_) => {
+                        self.eq.preset_name = preset.name.clone();
+                        self.eq.user_presets = rt_config::list_user();
+                    }
+                    Err(e) => self.status.error = Some(format!("preset save: {e}")),
+                }
+            }
             Message::Noop => {}
         };
         Task::none()
+    }
+
+    /// Mirror the UI EQ state into the engine: gains when enabled, flat
+    /// when bypassed. Lock-free on the engine side.
+    fn push_eq(&self) {
+        if let Some(handle) = self.player.as_ref().and_then(|p| p.eq()) {
+            handle.set_gains_db(if self.eq.enabled {
+                self.eq.gains_db
+            } else {
+                [0.0; 8]
+            });
+        }
     }
 
     pub fn view(&self) -> Element<'_, Message> {

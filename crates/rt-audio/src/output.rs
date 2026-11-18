@@ -99,9 +99,10 @@ impl Player {
             buffer_size: cpal::BufferSize::Default,
         };
 
-        // ~1 s of device-rate audio.
-        let capacity = rate as usize * channels as usize;
-        let (producer, mut consumer) = rtrb::RingBuffer::new(capacity.max(1024));
+        // ~2 s of device-rate audio: headroom for scheduler hiccups on the
+        // feeder thread (measured 2 underruns with a 1 s ring under load).
+        let capacity = 2 * rate as usize * channels as usize;
+        let (producer, mut consumer) = rtrb::RingBuffer::new(capacity.max(4096));
 
         let shared = Arc::new(Shared::default());
         let shared_cb = shared.clone();
