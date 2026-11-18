@@ -2,6 +2,7 @@
 //! product UI.
 
 use rt_api::{ApiClient, Track};
+use rt_stream::{StreamResolver, VideoId, YtDlpResolver};
 use std::time::Instant;
 
 pub fn run(args: &[String]) {
@@ -10,8 +11,9 @@ pub fn run(args: &[String]) {
         args.get(1).map(String::as_str),
     ) {
         (Some("search"), Some(query)) => search(query),
+        (Some("stream"), Some(video_id)) => stream(video_id),
         _ => {
-            eprintln!("usage: rustytube probe search <query>");
+            eprintln!("usage: rustytube probe search <query> | rustytube probe stream <video_id>");
             std::process::exit(2);
         }
     }
@@ -51,5 +53,51 @@ fn search(query: &str) {
         }
         println!("results: {}", tracks.len());
         println!("elapsed_ms: {elapsed_ms}");
+    });
+}
+
+fn stream(video_id: &str) {
+    let id = match VideoId::parse(video_id) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    rt.block_on(async {
+        let resolver = YtDlpResolver;
+        if !resolver.is_available().await {
+            eprintln!("yt-dlp not found in PATH");
+            std::process::exit(1);
+        }
+        let started = Instant::now();
+        let resolved = match resolver.resolve(&id).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("resolve failed: {e}");
+                std::process::exit(1);
+            }
+        };
+        println!("host: {}", resolved.url.host_str().unwrap_or("?"));
+        println!(
+            "url_roundtrip: {}",
+            resolved.url.as_str().chars().take(160).collect::<String>()
+        );
+        println!("resolve_ms: {}", started.elapsed().as_millis());
+
+        let bytes = match rt_stream::fetch_full(&resolved).await {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("fetch failed: {e}");
+                std::process::exit(1);
+            }
+        };
+        let ftyp = bytes.len() >= 8 && &bytes[4..8] == b"ftyp";
+        println!("fetched_bytes: {}", bytes.len());
+        println!("container_is_m4a_ftyp: {ftyp}");
     });
 }

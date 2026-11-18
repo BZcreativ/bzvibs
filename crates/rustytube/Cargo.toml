@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 rt-api.workspace = true
+rt-stream = { version = "0.1.0", path = "../rt-stream" }
 rt-ui.workspace = true
 tokio = { version = "1", features = ["rt", "net", "time"] }
 
