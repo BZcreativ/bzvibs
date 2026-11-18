@@ -1,251 +1,456 @@
-//! The three-column shell: left nav, center stage with the search bar and
-//! results, right tabbed panel, playback bar across the bottom. Dark theme
-//! per the PRD (#000000 to #121212, high-contrast text).
+//! The bzvibs shell per the concept boards: one skeleton, three theme
+//! palettes. Left sidebar (brand, nav, playlists), centered search pill,
+//! Song/Video mode pills above the visualizer stage, right panel with
+//! up-next chips and queue rows, bottom transport bar with a round play
+//! button and thin accent sliders.
+//!
+//! Style rule: closures capture only `p: &'static Palette` (and Copy
+//! booleans), never the app borrow, so widgets stay 'static.
 
+use crate::theme::{self, Palette};
 use crate::{Message, RightTab, RustyTube, Section};
 
-use iced::widget::{button, column, container, row, scrollable, text, text_input};
-use iced::{Alignment, Color, Element, Fill, Length};
+use iced::widget::slider::{Handle, HandleShape, Rail};
+use iced::widget::{button, column, container, row, scrollable, slider, text, text_input};
+use iced::{Alignment, Background, Border, Color, Element, Fill, Length};
 use rt_player::TransportState;
 
-pub const BG_ROOT: Color = Color::from_rgb(0.0, 0.0, 0.0);
-pub const BG_PANEL: Color = Color::from_rgb(0.07, 0.07, 0.07); // #121212
-pub const BG_HOVER: Color = Color::from_rgb(0.14, 0.14, 0.14);
-pub const FG: Color = Color::from_rgb(0.93, 0.93, 0.93);
-pub const FG_DIM: Color = Color::from_rgb(0.55, 0.55, 0.55);
-pub const ACCENT: Color = Color::from_rgb(1.0, 0.3, 0.35);
-
-fn panel<'a>(content: impl Into<Element<'a, Message>>) -> container::Container<'a, Message> {
-    container(content).style(|_t| container::Style {
-        background: Some(BG_PANEL.into()),
-        ..container::Style::default()
-    })
+fn luminance(c: Color) -> f32 {
+    0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
 }
 
-fn nav_button<'a>(label: &'a str, active: bool, msg: Message) -> button::Button<'a, Message> {
-    button(text(label).color(if active { FG } else { FG_DIM }))
-        .on_press(msg)
-        .style(move |_t, status| button::Style {
-            background: Some(
-                if status == button::Status::Hovered || active {
-                    BG_HOVER
-                } else {
-                    Color::TRANSPARENT
-                }
-                .into(),
-            ),
-            text_color: if active { FG } else { FG_DIM },
-            ..button::Style::default()
-        })
+/// Text color that stays readable on the accent (volt's lime needs dark).
+fn on_accent(p: &Palette) -> Color {
+    if luminance(p.accent) > 0.62 {
+        p.bg_base
+    } else {
+        Color::WHITE
+    }
 }
+
+fn accent_gradient(p: &Palette) -> Background {
+    Background::Gradient(
+        iced::gradient::Linear::new(std::f32::consts::FRAC_PI_4)
+            .add_stop(0.0, p.accent)
+            .add_stop(1.0, p.accent_soft)
+            .into(),
+    )
+}
+
+fn pill_border(color: Color) -> Border {
+    Border {
+        radius: 999.0.into(),
+        color,
+        width: 1.0,
+    }
+}
+
+// ---------- sidebar ----------
 
 fn sidebar(app: &RustyTube) -> Element<'static, Message> {
-    let nav = column![
-        nav_button(
-            "Home",
-            app.section == Section::Home,
-            Message::NavSelected(Section::Home)
-        ),
-        nav_button(
-            "Explore",
-            app.section == Section::Explore,
-            Message::NavSelected(Section::Explore)
-        ),
-        nav_button(
-            "Library",
-            app.section == Section::Library,
-            Message::NavSelected(Section::Library)
-        ),
-        text("Playlists").color(FG_DIM),
-        text("  Liked music").color(FG_DIM),
+    let p = theme::at(app.theme_index);
+    let brand = row![
+        text("▮▮▮")
+            .size(14)
+            .color(p.accent)
+            .font(iced::Font::MONOSPACE),
+        text("bzvibs").size(20).color(p.text),
     ]
-    .spacing(6)
-    .padding(12)
-    .width(Fill);
+    .spacing(8)
+    .align_y(Alignment::Center);
 
-    scrollable(nav).into()
+    let nav = ["Home", "Explore", "Library"];
+    let sections = [Section::Home, Section::Explore, Section::Library];
+    let mut nav_col = column![].spacing(4);
+    for (label, section) in nav.iter().zip(sections) {
+        let active = app.section == section;
+        let msg = Message::NavSelected(section);
+        let pill = button(text(label.to_string()).size(14))
+            .on_press(msg)
+            .width(Fill)
+            .padding([6, 12])
+            .style(move |_t, _s| button::Style {
+                background: Some(if active {
+                    accent_gradient(p)
+                } else {
+                    Background::Color(Color::TRANSPARENT)
+                }),
+                border: Border {
+                    radius: 12.0.into(),
+                    ..Border::default()
+                },
+                text_color: if active { on_accent(p) } else { p.text_dim },
+                ..button::Style::default()
+            });
+        nav_col = nav_col.push(pill);
+    }
+
+    let new_playlist = button(text("+ New playlist").size(12))
+        .on_press(Message::Noop)
+        .padding([6, 12])
+        .width(Fill)
+        .style(move |_t, _s| button::Style {
+            border: pill_border(p.text_dim),
+            text_color: p.text_dim,
+            ..button::Style::default()
+        });
+
+    let mut playlists = column![text("Playlists").size(11).color(p.text_dim)].spacing(2);
+    for name in [
+        "Liked music",
+        "Focus Flow",
+        "Late Night",
+        "Chill Vibes",
+        "Ambient",
+    ] {
+        playlists = playlists.push(text(format!("  {name}")).size(12).color(p.text_dim));
+    }
+
+    column![brand, nav_col, new_playlist, playlists]
+        .spacing(10)
+        .padding(16)
+        .width(Fill)
+        .into()
 }
 
+// ---------- top bar ----------
+
 fn topbar(app: &RustyTube) -> Element<'static, Message> {
-    let input = text_input("Search songs, artists, albums…", &app.search_query)
+    let p = theme::at(app.theme_index);
+    let query = app.search_query.clone();
+    let search = text_input("Search songs, albums, artists, podcasts…", &query)
         .on_input(Message::SearchQueryChanged)
         .on_submit(Message::SearchSubmitted)
+        .size(13)
+        .padding([8, 16])
         .style(move |_t, _s| text_input::Style {
-            background: Color::from_rgb(0.1, 0.1, 0.1).into(),
-            border: Default::default(),
-            icon: FG_DIM,
-            placeholder: FG_DIM,
-            value: FG,
-            selection: ACCENT,
+            background: Color::from_rgba(0.0, 0.0, 0.0, 0.35).into(),
+            border: pill_border(p.bg_card_active),
+            icon: p.text_dim,
+            placeholder: p.text_dim,
+            value: p.text,
+            selection: p.accent,
         });
-    row![input]
+
+    let theme_label = format!("◑ {}", p.name);
+    let theme_button = button(text(theme_label).size(12))
+        .on_press(Message::ThemeCycled)
+        .padding([6, 12])
+        .style(move |_t, _s| button::Style {
+            border: pill_border(p.bg_card_active),
+            text_color: p.text_dim,
+            ..button::Style::default()
+        });
+
+    row![search, theme_button]
         .spacing(8)
-        .padding(8)
+        .padding([8, 16])
         .width(Fill)
         .align_y(Alignment::Center)
         .into()
 }
 
-fn result_row(
-    i: usize,
-    title: &str,
-    artist: &str,
-    duration: &str,
-) -> button::Button<'static, Message> {
-    button(
-        row![
-            text(format!("{}. {}", i + 1, title)).color(FG),
-            text(artist.to_string()).color(FG_DIM),
-            text(duration.to_string()).color(FG_DIM),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center),
-    )
-    .on_press(Message::TrackClicked(i))
-    .width(Fill)
-    .style(move |_t, status| button::Style {
-        background: Some(
-            if status == button::Status::Hovered {
-                BG_HOVER
+// ---------- center stage ----------
+
+fn mode_pills(app: &RustyTube) -> Element<'static, Message> {
+    let p = theme::at(app.theme_index);
+    let song = button(text("Song").size(12))
+        .padding([5, 16])
+        .style(move |_t, _s| button::Style {
+            background: Some(accent_gradient(p)),
+            border: Border {
+                radius: 999.0.into(),
+                ..Border::default()
+            },
+            text_color: on_accent(p),
+            ..button::Style::default()
+        });
+    let video = button(text("Video").size(12))
+        .on_press(Message::Noop)
+        .padding([5, 16])
+        .style(move |_t, _s| button::Style {
+            border: pill_border(p.bg_card_active),
+            text_color: p.text_dim,
+            ..button::Style::default()
+        });
+    row![song, video].spacing(6).into()
+}
+
+fn visualizer_card(app: &RustyTube) -> Element<'static, Message> {
+    let p = theme::at(app.theme_index);
+    let transport = app.status.transport.clone();
+    let inner = match &transport {
+        TransportState::Loading(what) => column![
+            text("bzvibs")
+                .size(28)
+                .color(p.text_dim)
+                .font(iced::Font::MONOSPACE),
+            text(format!("loading {what}…")).size(12).color(p.accent),
+        ],
+        TransportState::Playing | TransportState::Paused => column![
+            text("bzvibs")
+                .size(28)
+                .color(p.accent)
+                .font(iced::Font::MONOSPACE),
+            text(if transport == TransportState::Playing {
+                "visualizer arrives with PR-12"
             } else {
-                Color::TRANSPARENT
-            }
-            .into(),
-        ),
-        text_color: FG,
-        ..button::Style::default()
-    })
+                "paused"
+            })
+            .size(11)
+            .color(p.text_dim),
+        ],
+        TransportState::Stopped => column![
+            text("bzvibs")
+                .size(28)
+                .color(p.accent_soft)
+                .font(iced::Font::MONOSPACE),
+            text("search to fill this stage").size(11).color(p.text_dim),
+        ],
+    }
+    .spacing(8)
+    .align_x(Alignment::Center);
+
+    container(inner)
+        .width(340)
+        .height(340)
+        .align_x(iced::alignment::Horizontal::Center)
+        .align_y(iced::alignment::Vertical::Center)
+        .style(move |_t| container::Style {
+            background: Some(Background::Gradient(
+                iced::gradient::Linear::new(std::f32::consts::FRAC_PI_2)
+                    .add_stop(0.0, p.bg_card)
+                    .add_stop(1.0, p.bg_base)
+                    .into(),
+            )),
+            border: Border {
+                radius: 24.0.into(),
+                color: p.accent,
+                width: 1.0,
+            },
+            ..container::Style::default()
+        })
+        .into()
 }
 
 fn stage(app: &RustyTube) -> Element<'static, Message> {
-    let headline = match app.section {
-        Section::Home => "Home",
-        Section::Explore => "Explore",
-        Section::Library => "Library",
-    };
+    let p = theme::at(app.theme_index);
+    let mut col = column![mode_pills(app), visualizer_card(app)]
+        .spacing(14)
+        .padding(16)
+        .align_x(Alignment::Center)
+        .width(Fill);
 
-    let mut body = column![].spacing(4).padding(16);
-    body = body.push(text(headline).size(24).color(FG));
-
-    match &app.status.transport {
-        TransportState::Loading(what) => {
-            body = body.push(text(format!("Loading: {what}…")).color(ACCENT));
-        }
-        TransportState::Playing | TransportState::Paused => {
-            if let Some(track) = &app.status.current {
-                body = body.push(
-                    text(format!("{} — {}", track.title, track.artist))
-                        .size(16)
-                        .color(FG),
-                );
-            }
-        }
-        TransportState::Stopped => {
-            if app.results.is_empty() {
-                body = body.push(text("Search to fill this stage").color(FG_DIM));
-            }
-        }
+    if let Some(track) = &app.status.current {
+        col = col.push(
+            column![
+                text(track.title.clone()).size(15).color(p.text),
+                text(track.artist.clone()).size(12).color(p.text_dim),
+            ]
+            .spacing(2)
+            .align_x(Alignment::Center),
+        );
     }
     if let Some(err) = &app.status.error {
-        body = body.push(text(format!("error: {err}")).color(ACCENT));
+        col = col.push(text(format!("error: {err}")).size(11).color(p.accent));
     }
-
-    if !app.results.is_empty() {
-        let rows = app
-            .results
-            .iter()
-            .enumerate()
-            .map(|(i, t)| result_row(i, &t.title, &t.artist, &t.duration).into());
-        body = body.push(scrollable(column(rows).spacing(2)).height(Fill));
-    }
-
-    body.width(Fill).height(Fill).into()
+    col.into()
 }
 
-fn tab_button<'a>(label: &'a str, active: bool, msg: Message) -> button::Button<'a, Message> {
-    button(text(label).size(12))
-        .on_press(msg)
+// ---------- right panel ----------
+
+fn chips_with(p: &'static Palette) -> Element<'static, Message> {
+    let mut chips = row![].spacing(6);
+    for (i, label) in ["All", "Chill", "Focus", "Sleep", "Familiar"]
+        .iter()
+        .enumerate()
+    {
+        let active = i == 0;
+        let label = label.to_string();
+        let chip = container(text(label).size(11))
+            .padding([4, 12])
+            .style(move |_t| container::Style {
+                background: Some(if active {
+                    Background::Color(p.accent)
+                } else {
+                    Background::Color(p.bg_card)
+                }),
+                border: Border {
+                    radius: 999.0.into(),
+                    ..Border::default()
+                },
+                ..container::Style::default()
+            });
+        chips = chips.push(chip);
+    }
+    chips.into()
+}
+
+fn queue_row(app: &RustyTube, i: usize) -> Element<'static, Message> {
+    let p = theme::at(app.theme_index);
+    let t = &app.results[i];
+    let active = app
+        .status
+        .current
+        .as_ref()
+        .map(|c| c.video_id == t.video_id)
+        .unwrap_or(false);
+    let row_content = row![
+        text(format!("{}.", i + 1)).size(11).color(p.text_dim),
+        column![
+            text(t.title.clone()).size(12).color(p.text),
+            text(t.artist.clone()).size(10).color(p.text_dim),
+        ]
+        .spacing(1),
+        text(t.duration.clone()).size(11).color(p.text_dim),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center);
+
+    button(row_content)
+        .on_press(Message::TrackClicked(i))
+        .width(Fill)
+        .padding([8, 10])
         .style(move |_t, _s| button::Style {
-            background: Some(if active { BG_HOVER } else { Color::TRANSPARENT }.into()),
-            text_color: if active { FG } else { FG_DIM },
+            background: Some(if active {
+                Background::Color(p.bg_card_active)
+            } else {
+                Background::Color(Color::TRANSPARENT)
+            }),
+            border: Border {
+                radius: 10.0.into(),
+                color: if active { p.accent } else { Color::TRANSPARENT },
+                width: if active { 1.0 } else { 0.0 },
+            },
+            text_color: p.text,
             ..button::Style::default()
         })
+        .into()
 }
 
 fn right_panel(app: &RustyTube) -> Element<'static, Message> {
-    let tabs = row![
-        tab_button(
-            "UP NEXT",
-            app.tab == RightTab::UpNext,
-            Message::TabSelected(RightTab::UpNext)
-        ),
-        tab_button(
-            "LYRICS",
-            app.tab == RightTab::Lyrics,
-            Message::TabSelected(RightTab::Lyrics)
-        ),
-        tab_button(
-            "RELATED",
-            app.tab == RightTab::Related,
-            Message::TabSelected(RightTab::Related)
-        ),
-    ]
-    .spacing(4)
-    .padding(8);
+    let p = theme::at(app.theme_index);
+    let tabs = ["UP NEXT", "LYRICS", "RELATED"];
+    let tab_vals = [RightTab::UpNext, RightTab::Lyrics, RightTab::Related];
+    let mut tabs_row = row![].spacing(4);
+    for (label, tab) in tabs.iter().zip(tab_vals) {
+        let active = app.tab == tab;
+        let label = label.to_string();
+        let msg = Message::TabSelected(tab);
+        let tab_btn = button(text(label).size(10))
+            .on_press(msg)
+            .padding([4, 8])
+            .style(move |_t, _s| button::Style {
+                background: Some(if active {
+                    Background::Color(p.bg_card_active)
+                } else {
+                    Background::Color(Color::TRANSPARENT)
+                }),
+                border: Border {
+                    radius: 8.0.into(),
+                    ..Border::default()
+                },
+                text_color: if active { p.accent } else { p.text_dim },
+                ..button::Style::default()
+            });
+        tabs_row = tabs_row.push(tab_btn);
+    }
 
-    let body = match app.tab {
-        RightTab::UpNext => text(format!(
-            "Queue: {} tracks (index {})",
-            app.status.queue_len, app.status.queue_index
-        ))
-        .color(FG_DIM),
-        RightTab::Lyrics => text("No lyrics loaded").color(FG_DIM),
-        RightTab::Related => text("Nothing related yet").color(FG_DIM),
-    };
+    let mut body = column![].spacing(8);
+    match app.tab {
+        RightTab::UpNext => {
+            body = body.push(chips_with(p));
+            if app.results.is_empty() {
+                body = body.push(text("Queue is empty").size(12).color(p.text_dim));
+            } else {
+                let rows = app
+                    .results
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| queue_row(app, i));
+                body = body.push(scrollable(column(rows).spacing(2)).height(Fill));
+            }
+        }
+        RightTab::Lyrics => {
+            body = body.push(text("No lyrics loaded").size(12).color(p.text_dim));
+        }
+        RightTab::Related => {
+            body = body.push(text("Nothing related yet").size(12).color(p.text_dim));
+        }
+    }
 
-    column![tabs, body].spacing(8).width(Fill).into()
+    column![tabs_row, body]
+        .spacing(10)
+        .padding(12)
+        .width(Fill)
+        .into()
 }
+
+// ---------- bottom bar ----------
 
 fn mmss(secs: f64) -> String {
     let total = secs.max(0.0) as u64;
     format!("{}:{:02}", total / 60, total % 60)
 }
 
+fn round_button(
+    p: &'static Palette,
+    label: String,
+    primary: bool,
+    msg: Message,
+) -> button::Button<'static, Message> {
+    button(text(label).size(if primary { 14 } else { 12 }))
+        .on_press(msg)
+        .width(if primary { 44 } else { 34 })
+        .height(if primary { 44 } else { 34 })
+        .style(move |_t, _s| button::Style {
+            background: Some(if primary {
+                accent_gradient(p)
+            } else {
+                Background::Color(p.bg_card)
+            }),
+            border: Border {
+                radius: 999.0.into(),
+                ..Border::default()
+            },
+            text_color: if primary { on_accent(p) } else { p.text },
+            ..button::Style::default()
+        })
+}
+
+fn accent_slider(
+    p: &'static Palette,
+    range: std::ops::RangeInclusive<f32>,
+    value: f32,
+    msg: fn(f32) -> Message,
+) -> slider::Slider<'static, f32, Message> {
+    slider(range, value, msg).style(move |_t, _s| slider::Style {
+        rail: Rail {
+            backgrounds: (
+                Background::Color(p.accent),
+                Background::Color(p.bg_card_active),
+            ),
+            width: 3.0,
+            border: Border::default(),
+        },
+        handle: Handle {
+            shape: HandleShape::Circle { radius: 6.0 },
+            background: Background::Color(p.accent),
+            border_width: 0.0,
+            border_color: Color::TRANSPARENT,
+        },
+    })
+}
+
 fn playback_bar(app: &RustyTube) -> Element<'static, Message> {
+    let p = theme::at(app.theme_index);
     let playing = app.status.transport == TransportState::Playing;
     let paused = app.status.transport == TransportState::Paused;
     let play_label = if playing {
-        "Pause"
-    } else if paused {
-        "Resume"
+        "❚❚".to_string()
     } else {
-        "Play"
+        "▶".to_string()
     };
-
-    let controls = row![
-        button(text("Prev").color(FG)).on_press(Message::PrevPressed),
-        button(text(play_label).color(FG)).on_press(Message::PlayPressed),
-        button(text("Next").color(FG)).on_press(Message::NextPressed),
-        button(
-            text(if app.shuffle {
-                "Shuffle on"
-            } else {
-                "Shuffle off"
-            })
-            .color(FG)
-        )
-        .on_press(Message::ShuffleToggled),
-        button(
-            text(format!("Repeat: {:?}", app.repeat))
-                .size(12)
-                .color(FG_DIM)
-        )
-        .on_press(Message::RepeatCycled),
-        button(text("+1").color(FG)).on_press(Message::ThumbsUp),
-        button(text("-1").color(FG)).on_press(Message::ThumbsDown),
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
 
     let duration = app.status.duration_secs;
     let position = app.status.position_secs.min(duration.max(0.001));
@@ -254,35 +459,66 @@ fn playback_bar(app: &RustyTube) -> Element<'static, Message> {
     } else {
         0.0
     };
-    let seek = iced::widget::slider(0.0..=1.0, frac, Message::SeekChanged);
-    let volume = iced::widget::slider(0.0..=1.0, app.volume, Message::VolumeChanged);
 
     row![
-        controls,
-        text(format!("{} / {}", mmss(position), mmss(duration))).color(FG_DIM),
-        seek,
-        volume,
+        round_button(p, "⏮".to_string(), false, Message::PrevPressed),
+        round_button(p, play_label, true, Message::PlayPressed),
+        round_button(p, "⏭".to_string(), false, Message::NextPressed),
+        text(format!("{} / {}", mmss(position), mmss(duration)))
+            .size(11)
+            .color(p.text_dim),
+        accent_slider(p, 0.0..=1.0, frac, Message::SeekChanged),
+        text(if paused { "paused" } else { "" })
+            .size(10)
+            .color(p.text_dim),
+        round_button(p, "⤨".to_string(), false, Message::ShuffleToggled),
+        round_button(p, "↻".to_string(), false, Message::RepeatCycled),
+        text(format!("{:?}", app.repeat)).size(9).color(p.text_dim),
+        round_button(p, "♡".to_string(), false, Message::ThumbsUp),
+        accent_slider(p, 0.0..=1.0, app.volume, Message::VolumeChanged),
     ]
-    .spacing(12)
-    .padding(10)
+    .spacing(8)
+    .padding([10, 16])
     .align_y(Alignment::Center)
     .width(Fill)
     .into()
 }
 
+// ---------- root ----------
+
+fn panel<'a>(
+    app: &RustyTube,
+    content: impl Into<Element<'a, Message>>,
+) -> container::Container<'a, Message> {
+    let bg = theme::at(app.theme_index).bg_panel;
+    container(content).style(move |_t| container::Style {
+        background: Some(bg.into()),
+        ..container::Style::default()
+    })
+}
+
 pub fn view(app: &RustyTube) -> Element<'static, Message> {
+    let bg = theme::at(app.theme_index).bg_base;
     let body = row![
-        panel(sidebar(app)).width(Length::Fixed(220.0)).height(Fill),
+        panel(app, sidebar(app))
+            .width(Length::Fixed(220.0))
+            .height(Fill),
         column![topbar(app), stage(app)].width(Fill),
-        panel(right_panel(app))
-            .width(Length::Fixed(280.0))
+        panel(app, right_panel(app))
+            .width(Length::Fixed(300.0))
             .height(Fill),
     ]
     .width(Fill)
     .height(Fill);
 
-    column![body, playback_bar(app)]
+    let page = column![body, playback_bar(app)].width(Fill).height(Fill);
+
+    container(page)
         .width(Fill)
         .height(Fill)
+        .style(move |_t| container::Style {
+            background: Some(bg.into()),
+            ..container::Style::default()
+        })
         .into()
 }

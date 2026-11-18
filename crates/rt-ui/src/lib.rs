@@ -2,6 +2,7 @@
 //! to search and playback (PR-7).
 
 pub mod state;
+pub mod theme;
 pub mod view;
 
 pub use state::{RightTab, Section, Transport, TransportEvent, transport_step};
@@ -58,6 +59,8 @@ pub enum Message {
     ThumbsDown,
     VolumeChanged(f32),
     SeekChanged(f32),
+    ThemeCycled,
+    Noop,
 }
 
 pub struct RustyTube {
@@ -69,6 +72,7 @@ pub struct RustyTube {
     pub shuffle: bool,
     pub repeat: Repeat,
     pub volume: f32,
+    pub theme_index: usize,
     pub player: Option<PlayerHandle>,
     pub api: Option<Arc<ApiClient>>,
 }
@@ -84,6 +88,11 @@ impl Default for RustyTube {
             shuffle: false,
             repeat: Repeat::Off,
             volume: 1.0,
+            theme_index: std::env::var("RT_THEME")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .map(|i| i % theme::THEMES.len())
+                .unwrap_or(0),
             player: PlayerHandle::spawn().ok(),
             api: ApiClient::new().ok().map(Arc::new),
         }
@@ -171,6 +180,10 @@ impl RustyTube {
                     p.send(Cmd::Seek(f));
                 }
             }
+            Message::ThemeCycled => {
+                self.theme_index = (self.theme_index + 1) % theme::THEMES.len();
+            }
+            Message::Noop => {}
         };
         Task::none()
     }
@@ -188,7 +201,14 @@ impl RustyTube {
 pub fn run() -> Result {
     iced::application(RustyTube::new, RustyTube::update, RustyTube::view)
         .title("RustyTube")
-        .window_size(iced::Size::new(1280.0, 800.0))
+        .window(iced::window::Settings {
+            size: iced::Size::new(1280.0, 800.0),
+            // Start maximized: the shell is Fill-based and adapts to whatever
+            // surface the OS hands out on this multi-DPI display set.
+            maximized: true,
+            resizable: true,
+            ..Default::default()
+        })
         .subscription(RustyTube::subscription)
         .run()
 }
