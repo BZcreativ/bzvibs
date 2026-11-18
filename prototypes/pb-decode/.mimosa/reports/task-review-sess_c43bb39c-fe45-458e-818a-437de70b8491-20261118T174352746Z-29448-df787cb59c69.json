@@ -1,0 +1,394 @@
+{
+  "schema_version": "mimosa-task-review/v2",
+  "run_id": "20261118T174352746Z-29448-df787cb59c69",
+  "run_status": "completed",
+  "errors": [],
+  "coverage": {
+    "schema_version": "mimosa-hook-coverage/v1",
+    "status": "complete",
+    "scope": "hook_observed_diff",
+    "baseline": {
+      "complete": false,
+      "captured_files": 1,
+      "candidate_limit": 5000,
+      "truncated": false,
+      "enumeration_error_count": 0,
+      "snapshot_error_count": 0,
+      "compensated_target_count": 1
+    },
+    "change_tracking": {
+      "touched_observed": 1,
+      "touched_retained": 1,
+      "truncated": false,
+      "bash_mutation": false,
+      "bash_discovered": 0,
+      "bash_discovery_limit": 80,
+      "bash_discovery_truncated": false
+    },
+    "candidates": {
+      "eligible_files": 1,
+      "selected_files": 1,
+      "limit": 20,
+      "truncated": false
+    },
+    "scanning": {
+      "required_files": 1,
+      "scanned_files": 1,
+      "skipped_files": 0,
+      "failed_files": 0,
+      "project_checks_required": 0,
+      "project_checks_completed": 0
+    },
+    "notification": {
+      "eligible_findings": 1,
+      "detailed_findings": 1,
+      "detail_limit": 3,
+      "truncated": false
+    },
+    "reason_counts": {
+      "baseline_partial": 1
+    },
+    "reasons": [
+      {
+        "code": "baseline_partial",
+        "stage": "baseline",
+        "target": ".",
+        "detail": "baseline capture had enumeration or snapshot errors",
+        "affects_completion": false
+      }
+    ],
+    "reasons_truncated": false
+  },
+  "generated_at": "2026-11-18T17:43:52.746Z",
+  "session_id": "sess_c43bb39c-fe45-458e-818a-437de70b8491",
+  "target": ".",
+  "revision": null,
+  "rules_version": "unavailable",
+  "diff_hash": "9a8e8a6ad4d544da66ef0d8b397a74d46a8b55e1e443eebab36cecba9ce06fb2",
+  "diff": {
+    "algorithm": "sha256",
+    "changed_file_count": 1,
+    "changed_files": [
+      {
+        "file": "src/main.rs",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 192
+          }
+        ],
+        "before_hash": "c8e0583694bb1e0188dbe28fe0d65ac1130723c55f968b6262b906c147f72549",
+        "after_hash": "c032f4baecf7b2203db58e58c0ecf9106e979e278ca91a64e3f4c3dc7ea926ab"
+      }
+    ]
+  },
+  "timing": {
+    "started_at": "2026-11-18T17:43:51.544Z",
+    "completed_at": "2026-11-18T17:43:52.746Z",
+    "duration_ms": 1202,
+    "measurement": "hook_wall_clock"
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "model_calls": 0,
+    "measurement": "known-zero"
+  },
+  "telemetry": {
+    "schemaVersion": "mimosa-gate-telemetry/v1",
+    "profile": "gate",
+    "operation": "Stop",
+    "outcome": "complete",
+    "latencyMs": 1202,
+    "peakMemoryBytes": 159256576,
+    "memoryMeasurement": "max-observed-process-rss",
+    "scannedFiles": 1,
+    "cache": {
+      "hits": 0,
+      "misses": 0,
+      "measurement": "not-applicable"
+    },
+    "denyCount": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "total": 0,
+      "modelCalls": 0,
+      "measurement": "known-zero"
+    }
+  },
+  "finding_count": 1,
+  "rewake_finding_count": 1,
+  "evidence_boundary": {
+    "scan": "candidate",
+    "static_fix_verification": "observed_static_only",
+    "runtime_verification": "not_performed"
+  },
+  "finding_events": [
+    {
+      "finding_id": "mimosa-ad5d29c1ea84dee856698c66",
+      "file": "src/main.rs",
+      "line": 48,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "blocked",
+      "decision": "deny",
+      "at": "2026-11-18T17:20:14.167Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "3dd068faf2ac8e3e70a17bce7976aa4c3482c58823f1ea2bb14b77ea0e18a29f",
+        "runtime_oracle": false
+      }
+    },
+    {
+      "finding_id": "mimosa-211995915841b6ea5decb0c3",
+      "file": "src/main.rs",
+      "line": 104,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "blocked",
+      "decision": "deny",
+      "at": "2026-11-18T17:20:14.167Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "796d575baece2f249bdd8f4fb6eb32e8b34dc75312c3161a3546757b52ed174c",
+        "runtime_oracle": false
+      }
+    },
+    {
+      "finding_id": "mimosa-7349ae22cb5e246822a51554",
+      "file": "src/main.rs",
+      "line": 114,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "blocked",
+      "decision": "deny",
+      "at": "2026-11-18T17:20:43.618Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "bce610c37cf0a7653a6a7df83d52152b4a6e090fd1a5a8e540994be072dc9349",
+        "runtime_oracle": false
+      }
+    },
+    {
+      "finding_id": "mimosa-ad5d29c1ea84dee856698c66",
+      "file": "src/main.rs",
+      "line": 48,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "fixed_candidate",
+      "decision": "repair_observed",
+      "at": "2026-11-18T17:21:29.446Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "3dd068faf2ac8e3e70a17bce7976aa4c3482c58823f1ea2bb14b77ea0e18a29f",
+        "candidate_before_evidence_hash": "3dd068faf2ac8e3e70a17bce7976aa4c3482c58823f1ea2bb14b77ea0e18a29f",
+        "post_change_evidence_hash_at_previous_location": "18a392be485def3e47379cf114527e2d8cc876ee486b20e93aced077e3ed8394",
+        "runtime_oracle": false,
+        "verification": {
+          "method": "mimosa-posttool-static-rescan",
+          "finding_absent": true,
+          "runtime_oracle": false
+        }
+      }
+    },
+    {
+      "finding_id": "mimosa-ad5d29c1ea84dee856698c66",
+      "file": "src/main.rs",
+      "line": 48,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "static_verified",
+      "decision": "static_rescan_passed",
+      "at": "2026-11-18T17:21:29.446Z",
+      "evidence": {
+        "kind": "static_scan",
+        "boundary": "observed",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "3dd068faf2ac8e3e70a17bce7976aa4c3482c58823f1ea2bb14b77ea0e18a29f",
+        "candidate_before_evidence_hash": "3dd068faf2ac8e3e70a17bce7976aa4c3482c58823f1ea2bb14b77ea0e18a29f",
+        "post_change_evidence_hash_at_previous_location": "18a392be485def3e47379cf114527e2d8cc876ee486b20e93aced077e3ed8394",
+        "runtime_oracle": false,
+        "verification": {
+          "method": "mimosa-posttool-static-rescan",
+          "finding_absent": true,
+          "runtime_oracle": false
+        }
+      }
+    },
+    {
+      "finding_id": "mimosa-211995915841b6ea5decb0c3",
+      "file": "src/main.rs",
+      "line": 104,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "fixed_candidate",
+      "decision": "repair_observed",
+      "at": "2026-11-18T17:21:29.446Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "796d575baece2f249bdd8f4fb6eb32e8b34dc75312c3161a3546757b52ed174c",
+        "candidate_before_evidence_hash": "796d575baece2f249bdd8f4fb6eb32e8b34dc75312c3161a3546757b52ed174c",
+        "post_change_evidence_hash_at_previous_location": "4ce10f8fd2e6284957281871bf680c943a2e78e2e6ef4f9271d03c47d6160c6c",
+        "runtime_oracle": false,
+        "verification": {
+          "method": "mimosa-posttool-static-rescan",
+          "finding_absent": true,
+          "runtime_oracle": false
+        }
+      }
+    },
+    {
+      "finding_id": "mimosa-211995915841b6ea5decb0c3",
+      "file": "src/main.rs",
+      "line": 104,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "static_verified",
+      "decision": "static_rescan_passed",
+      "at": "2026-11-18T17:21:29.446Z",
+      "evidence": {
+        "kind": "static_scan",
+        "boundary": "observed",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "796d575baece2f249bdd8f4fb6eb32e8b34dc75312c3161a3546757b52ed174c",
+        "candidate_before_evidence_hash": "796d575baece2f249bdd8f4fb6eb32e8b34dc75312c3161a3546757b52ed174c",
+        "post_change_evidence_hash_at_previous_location": "4ce10f8fd2e6284957281871bf680c943a2e78e2e6ef4f9271d03c47d6160c6c",
+        "runtime_oracle": false,
+        "verification": {
+          "method": "mimosa-posttool-static-rescan",
+          "finding_absent": true,
+          "runtime_oracle": false
+        }
+      }
+    },
+    {
+      "finding_id": "mimosa-7349ae22cb5e246822a51554",
+      "file": "src/main.rs",
+      "line": 114,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "fixed_candidate",
+      "decision": "repair_observed",
+      "at": "2026-11-18T17:21:29.446Z",
+      "evidence": {
+        "kind": "source",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "bce610c37cf0a7653a6a7df83d52152b4a6e090fd1a5a8e540994be072dc9349",
+        "candidate_before_evidence_hash": "bce610c37cf0a7653a6a7df83d52152b4a6e090fd1a5a8e540994be072dc9349",
+        "post_change_evidence_hash_at_previous_location": "f11ab48f1f08625ed486c4fe34a5379808fbd759471141b16f2ae055565cebed",
+        "runtime_oracle": false,
+        "verification": {
+          "method": "mimosa-posttool-static-rescan",
+          "finding_absent": true,
+          "runtime_oracle": false
+        }
+      }
+    },
+    {
+      "finding_id": "mimosa-7349ae22cb5e246822a51554",
+      "file": "src/main.rs",
+      "line": 114,
+      "rule_id": "security",
+      "severity": "high",
+      "category": "命令注入",
+      "status": "static_verified",
+      "decision": "static_rescan_passed",
+      "at": "2026-11-18T17:21:29.446Z",
+      "evidence": {
+        "kind": "static_scan",
+        "boundary": "observed",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "bce610c37cf0a7653a6a7df83d52152b4a6e090fd1a5a8e540994be072dc9349",
+        "candidate_before_evidence_hash": "bce610c37cf0a7653a6a7df83d52152b4a6e090fd1a5a8e540994be072dc9349",
+        "post_change_evidence_hash_at_previous_location": "f11ab48f1f08625ed486c4fe34a5379808fbd759471141b16f2ae055565cebed",
+        "runtime_oracle": false,
+        "verification": {
+          "method": "mimosa-posttool-static-rescan",
+          "finding_absent": true,
+          "runtime_oracle": false
+        }
+      }
+    },
+    {
+      "finding_id": "mimosa-cf3548ecddbfda88fcb386bc",
+      "file": "src/main.rs",
+      "line": 58,
+      "severity": "high",
+      "category": "SSRF 服务端请求伪造",
+      "status": "blocked",
+      "decision": "stop_rewake",
+      "at": "2026-11-18T17:43:52.746Z",
+      "evidence": {
+        "kind": "static_scan",
+        "boundary": "candidate",
+        "producer": "deterministic",
+        "source": "semgrep",
+        "evidence_hash": "5a2a5d3186b0a6d2e64274100769d390b609f0dbcd66dce29b4a9e8b2a481c15",
+        "runtime_oracle": false
+      }
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "mimosa-cf3548ecddbfda88fcb386bc",
+      "file": "src/main.rs",
+      "line": 58,
+      "end_line": 58,
+      "severity": "high",
+      "category": "SSRF 服务端请求伪造",
+      "kind": "semgrep",
+      "advisory": false,
+      "status": "blocked",
+      "evidence_boundary": "candidate",
+      "evidence": [
+        {
+          "kind": "static_scan",
+          "boundary": "candidate",
+          "producer": "deterministic",
+          "source": "semgrep",
+          "file": "src/main.rs",
+          "line": 58,
+          "evidence_hash": "5a2a5d3186b0a6d2e64274100769d390b609f0dbcd66dce29b4a9e8b2a481c15",
+          "runtime_oracle": false
+        }
+      ],
+      "already_reported_to_agent": false,
+      "selected_for_rewake": true
+    }
+  ],
+  "artifacts": {
+    "immutable_report": ".mimosa/reports/task-review-sess_c43bb39c-fe45-458e-818a-437de70b8491-20261118T174352746Z-29448-df787cb59c69.json",
+    "latest_report": ".mimosa/reports/task-review-sess_c43bb39c-fe45-458e-818a-437de70b8491.json",
+    "history_summary": ".mimosa/history/run-20261118T174352746Z-29448-df787cb59c69.json"
+  }
+}

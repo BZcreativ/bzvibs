@@ -1,0 +1,11 @@
+[package]
+name = "rustytube"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rt-ui.workspace = true
+
+[[bin]]
+name = "rustytube"
+path = "src/main.rs"

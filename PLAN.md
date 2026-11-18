@@ -1,0 +1,157 @@
+# RustyTube Music — delivery plan
+
+What changes: a desktop YouTube Music client in Rust ships in three phases. Phase 1 delivers search, playback, and the app shell without login. Phase 2 adds Google OAuth, the user's library, and lyrics. Phase 3 adds the 8-band equalizer and the FFT visualizer. Each PR below lands one change with its own evidence.
+
+This plan is grounded in prototypes run against live YouTube Music on 2026-11-18 (evidence in `prototypes/`, throwaway code):
+
+| Fork | Result (measured) |
+| --- | --- |
+| PRD's `ytmusic-api` crate | Rejected. Its `InnerTubeClient` requires browser-cookie `BrowserAuth`; no unauthenticated mode, no OAuth device flow. |
+| `ytmapi-rs` 0.3.4 unauthenticated search | Works. `search_songs` returned 20 tracks with correct titles and video IDs. Its page-bootstrap (`ytcfg.set` parse on music.youtube.com) is broken; the workaround (inject a serde-built `NoAuthToken`, skip the page fetch) works and lands in PR-2. |
+| Native stream resolution (rusty_ytdl 0.7.4) | Broken today. All `stream()` paths return "Video source empty"; `get_info` formats carry empty URLs. Direct `/player` probes: WEB_REMIX `UNPLAYABLE`, ANDROID_VR `LOGIN_REQUIRED` (bot check), TVHTML5 dead. This is the poToken/attestation wall. |
+| yt-dlp resolver subprocess | Works. `yt-dlp -f 140 -g` resolved a signed googlevideo.com m4a URL (client `VISIONOS`). This is also the maintained youtui player's fallback design. |
+| Fetch + decode + DSP | Works. Guarded fetch of 3,459,077 bytes, symphonia demuxed 9,200 packets, decoded 9,420,800 frames (213.6 s, 44.1 kHz stereo AAC). Biquad sine tests: 1 kHz peaking +6 dB measured +6.00 dB; both shelves +4.5 dB at corner (correct shelf behavior). |
+| GUI | Iced 0.14 and Slint 1.19 both compile and open a window on this toolchain. Plan picks Iced: MIT license, Elm/MVU architecture matches the PRD, pure Rust. Slint's license (GPL or commercial royalty-free) and DSL layer are the deciding costs. |
+
+Security constraint carried into every PR that makes an outbound request (operator directive): https only; before any request, validate the host and reject localhost, loopback, private, and reserved addresses. The one shared guard lives in PR-2 and every fetch path goes through it.
+
+## PR list in landing order
+
+PR-1, PR-2, PR-3, PR-4, PR-5, PR-6, PR-7 (Phase 1), PR-8, PR-9, PR-10 (Phase 2), PR-11, PR-12 (Phase 3).
+
+## Dependency graph
+
+- trunk → PR-1 → { PR-2, PR-3, PR-4, PR-6 } — these four are independent of each other and can branch from trunk in parallel after PR-1.
+- PR-4 → PR-5.
+- PR-2 + PR-3 + PR-5 + PR-6 → PR-7.
+- PR-2 → PR-8 → PR-9.
+- PR-2 + PR-6 → PR-10.
+- PR-7 + PR-6 → PR-11 and PR-12 (the EQ and visualizer need real playback wired).
+
+Files each PR may touch: PR-1 `Cargo.toml`, `crates/*` skeletons, `.github/workflows/ci.yml`, `rustfmt.toml`, `clippy.toml`. PR-2 `crates/rt-api/**`. PR-3 `crates/rt-stream/**`. PR-4 `crates/rt-audio/{decode,dsp}/**`. PR-5 `crates/rt-audio/output/**`. PR-6 `crates/rt-ui/**`. PR-7 `crates/rt-ui/**`, `crates/rt-player/**`. PR-8 `crates/rt-api/auth/**`. PR-9 `crates/rt-api/**`, `crates/rt-ui/sidebar/**`. PR-10 `crates/rt-ui/panels/**`. PR-11 `crates/rt-audio/dsp/**`, `crates/rt-ui/eq/**`, `crates/rt-config/**`. PR-12 `crates/rt-audio/tap/**`, `crates/rt-ui/visualizer/**`.
+
+## PR-1 — workspace scaffold and CI
+
+- [ ] Depends on: nothing (this creates the trunk).
+- [ ] Files: root `Cargo.toml` (workspace: `rt-api`, `rt-stream`, `rt-audio`, `rt-ui`, bin `rustytube`), CI workflow, fmt/clippy config. Delete the nested `.git` dirs cargo init created under `prototypes/` and commit `prototypes/` as plan evidence.
+- [ ] The one change: an empty Iced window opens from a clean checkout, with CI green on fmt, clippy `-D warnings`, and test run.
+- [ ] Unit box: `cargo test` passes (can be zero tests), CI green on Windows and one Linux runner.
+- [ ] Live box: `cargo run --release` opens a window titled RustyTube on this machine. Pass predicate: window appears within 10 s and closes cleanly.
+- [ ] Perf box: metric `cargo build --release` cold time; probe `cargo build --release --timings`; baseline: this run IS the baseline (first measurement, recorded in the PR body); fails if a later PR regresses it by more than 25%.
+
+## PR-2 — InnerTube client with typed model and guarded transport
+
+- [ ] Depends on: PR-1.
+- [ ] Files: `crates/rt-api/**`.
+- [ ] The one change: `search_songs`, `get_lyrics_id`, `get_playlist_tracks`, `get_watch_playlist_from_video_id` wrapped behind `ApiClient`, with the serde-injected `NoAuthToken` bootstrap workaround and the one shared URL guard (https, host validated, localhost/loopback/private/reserved and non-allowlisted hosts rejected).
+- [ ] Unit box: fixture JSON (saved from live responses) parses into `Track`/`SearchResult` with correct fields; guard rejects a table of bad URLs (http scheme, localhost, IP literal, private-range resolved name, wrong host family) and accepts the googlevideo/YouTube hosts.
+- [ ] Live box: `cargo run -p rustytube -- probe search "daft punk"` prints at least 5 tracks with title, artist, duration, video_id. Pass predicate: 5+ results, each with an 11-character video_id.
+- [ ] Perf box: metric search round-trip p50; probe: 5 consecutive probe runs, `Instant` timing printed; baseline: first PR-2 merge run; fails if p50 > 3 s.
+
+## PR-3 — stream resolver (yt-dlp subprocess primary, native behind flag)
+
+- [ ] Depends on: PR-1.
+- [ ] Files: `crates/rt-stream/**`.
+- [ ] The one change: `StreamResolver` trait with `YtDlpResolver` (spawns `yt-dlp -f 140 -g` with an all-literal argv) as the default, plus a guarded range-fetching client for the resolved googlevideo URL. A `NativeInnertubeResolver` (rusty_ytdl) stays behind a feature flag, documented as broken by the poToken wall, for the day the ecosystem recovers. First-run check tells the operator when `yt-dlp` is missing from PATH.
+- [ ] Unit box: guard table from PR-2 reused; resolver output parsing (URL line from stdout) tested against fixture output; missing-binary error path tested.
+- [ ] Live box: `probe stream <video_id>` prints the resolved host and the first 16 bytes of the fetched body; bytes 4–8 must be `ftyp`.
+- [ ] Perf box: metric yt-dlp resolve wall time p50; probe: 5 runs; baseline at merge; fails if p50 > 5 s.
+
+## PR-4 — decoder and 8-band DSP engine
+
+- [ ] Depends on: PR-1.
+- [ ] Files: `crates/rt-audio/decode/**`, `crates/rt-audio/dsp/**`.
+- [ ] The one change: symphonia demux+decode to interleaved f32 (scratch-slice append, not `copy_to_vec_interleaved` which overwrites), plus the 8-band biquad cascade (60 Hz low shelf, 250/500/1k/2k/4k/8k peaking, 16 kHz high shelf) with lock-free coefficient swap on slider moves (coefficients replaced, never mutated in place).
+- [ ] Unit box: sine tests from the prototype as real tests — 1 kHz peaking +6 dB must measure +6.0 ±0.1 dB; each shelf +9 dB must measure +4.5 ±0.3 dB at its corner; cascade over a generated chirp changes RMS by the predicted amount.
+- [ ] Live box: decode the PR-3 probe's cached real m4a: 9,200 packets, ~9.4 M frames, duration 213 ±1 s.
+- [ ] Perf box: metric decode throughput; probe: decode 30 s of audio, wall-clocked; baseline at merge; fails if slower than 5× realtime (30 s in > 6 s).
+
+## PR-5 — audio output and transport controls
+
+- [ ] Depends on: PR-4.
+- [ ] Files: `crates/rt-audio/output/**`.
+- [ ] The one change: cpal output stream fed by a SPSC ring buffer; the DSP cascade runs inside the audio callback; play/pause/skip/seek/volume commands cross from UI via a command channel; underrun counter exposed.
+- [ ] Unit box: ring buffer wrap/pop invariants; command ordering under burst.
+- [ ] Live box: play the cached track through the real output device for 60 s, then pause and resume. Pass predicate: underrun counter is 0, resume continues within 0.5 s.
+- [ ] Perf box: metric DSP-in-callback cost; probe: process 4096-frame chunks in a bench (`cargo bench` or criterion); baseline at merge; fails if > 2 ms per chunk (20% of a 10 ms callback budget).
+
+## PR-6 — UI shell (review-gated)
+
+- [ ] Depends on: PR-1.
+- [ ] Files: `crates/rt-ui/**`.
+- [ ] The one change: the reference layout — left nav, top search bar, center stage, right tabbed panel (UP NEXT, LYRICS, RELATED), bottom playback bar — in Iced with the PRD's black/#121212 theme. Navigation is a state machine, not scattered booleans.
+- [ ] Unit box: navigation state machine transitions.
+- [ ] Live box: screenshots of the three views (home, search results, playing) against the layout grid; operator reviews before merge.
+- [ ] Perf box: metric idle CPU; probe: 60 s idle window, Task Manager or `typeperf` sample; baseline at merge; fails if > 5% of one core.
+
+## PR-7 — Phase 1 wired end to end
+
+- [ ] Depends on: PR-2, PR-3, PR-5, PR-6.
+- [ ] Files: `crates/rt-ui/**`, `crates/rt-player/**`.
+- [ ] The one change: type in search, press Enter, click a track, audio plays; up-next queue filled from `get_watch_playlist_from_video_id`; skip/previous/shuffle work off the queue.
+- [ ] Unit box: queue logic (shuffle, repeat modes, skip at boundaries).
+- [ ] Live box: search "never gonna give you up", click the first result. Pass predicate: audible audio starts within 5 s of the click; skip advances to a different track.
+- [ ] Perf box: metric click-to-audio latency p50 (includes yt-dlp resolve + fetch + decode-fill); probe: instrument with `Instant` and log; baseline at merge; fails if p50 > 3 s.
+
+## PR-8 — OAuth device flow and keyring session (review-gated)
+
+- [ ] Depends on: PR-2, plus one operator dependency: a Google Cloud OAuth client ID of the TV/limited-input device profile, created by the operator (ytmapi-rs's `OAuthTokenGenerator` takes the client_id as input; there is no bundled one).
+- [ ] Files: `crates/rt-api/auth/**`.
+- [ ] The one change: device-code login (`google.com/device`), token stored in the OS keyring (`keyring` crate), session validity canary that distinguishes logged-out-but-200 responses, token refresh.
+- [ ] Unit box: refresh scheduling with a fake clock; canary against a logged-out fixture response.
+- [ ] Live box: complete the device flow with the operator's client ID, restart the app, session survives. Operator reviews the login interaction before merge.
+- [ ] Perf box: metric refresh call p95; probe: instrumented refresh; baseline at merge; fails if > 5 s.
+
+## PR-9 — library and playlists
+
+- [ ] Depends on: PR-8.
+- [ ] Files: `crates/rt-api/**`, `crates/rt-ui/sidebar/**`.
+- [ ] The one change: sidebar populated with liked music and user playlists from the authenticated API; clicking one loads and plays it.
+- [ ] Unit box: playlist pagination via continuations against fixtures.
+- [ ] Live box: liked-music list shows the operator's actual liked tracks; play one through.
+- [ ] Perf box: metric library load p50; baseline at merge; fails if > 4 s for 500+ track libraries.
+
+## PR-10 — lyrics panel
+
+- [ ] Depends on: PR-2, PR-6.
+- [ ] Files: `crates/rt-ui/panels/**`.
+- [ ] The one change: LYRICS tab renders `get_lyrics_id` + `get_lyrics` output; synced lyrics highlight follows playback position when timestamps exist.
+- [ ] Unit box: timestamped parse; static fallback.
+- [ ] Live box: a known synced track scrolls its highlight within ±1 s of audio.
+- [ ] Perf box: metric panel update cost; fails if lyric highlight updates cost > 1 ms each.
+
+## PR-11 — EQ UI and presets (review-gated)
+
+- [ ] Depends on: PR-7 (real playback), PR-4.
+- [ ] Files: `crates/rt-audio/dsp/**`, `crates/rt-ui/eq/**`, `crates/rt-config/**`.
+- [ ] The one change: 8 vertical sliders (60 Hz–16 kHz per the PRD band map), live coefficient swap, presets (flat, bass, vocal, plus user save/load/export as files in the config dir).
+- [ ] Unit box: preset round-trip serialize/deserialize; coefficient swap is atomic (no partially-updated cascade observable).
+- [ ] Live box: with a 1 kHz tone track playing, band 4 +6 dB and bypass toggle produce an audible/RTA-measurable difference; operator reviews the interaction.
+- [ ] Perf box: metric slider-move-to-coefficients-applied latency; fails if > 50 ms.
+
+## PR-12 — FFT visualizer (review-gated)
+
+- [ ] Depends on: PR-7 (real playback), PR-5 (tap point).
+- [ ] Files: `crates/rt-audio/tap/**`, `crates/rt-ui/visualizer/**`.
+- [ ] The one change: post-DSP buffer tap feeds `rustfft`; center stage renders bars and the circular spectrum, with accent colors derived from album art.
+- [ ] Unit box: FFT of a 440 Hz sine peaks in the right bin.
+- [ ] Live box: bars move while playing, freeze on pause; operator reviews the look.
+- [ ] Perf box: metric per-frame FFT + render cost at 60 fps; fails if > 2 ms/frame average.
+
+## Cut from this plan (explicit)
+
+- Video mode (song/video toggle): audio-only itag 140 is the Phase 1–3 path. Video needs a second decode pipeline and a render surface; not worth it before the EQ ships. Revisit after PR-12.
+- COMMENTS tab: music tracks commonly disable comments and the endpoint is unproven for them. RELATED and UP NEXT land in PR-7/PR-10 from the watch-playlist call.
+- Home/Explore feed pages: sidebar navigation exists from PR-6; Home is search-first, Explore maps to filtered search. A real home feed needs an endpoint ytmapi-rs does not expose today.
+
+## What stays unproven at plan time
+
+- OAuth device flow against Google with a real operator-owned client ID (PR-8 is its first live test).
+- Stream resolution durability: YouTube's attestation wall moves; yt-dlp updates track it. The `StreamResolver` trait exists so the backend can be replaced without touching playback.
+- cpal/WASAPI behavior on the operator's audio hardware (PR-5's underrun predicate is the test).
+- Lyrics availability for arbitrary tracks (some have none; panel needs the empty state).
+- Edge-catalog behavior: age-restricted, region-blocked, and podcast content (the resolver will error; error surfacing lands with PR-7).
+
+## Scratch
+
+Prototypes live in `prototypes/pa-api` (search + stream probing) and `prototypes/pb-decode` (fetch + decode + DSP proof). Both are throwaway instruments per the prototype playbook; they are committed as evidence, not as production code.

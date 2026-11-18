@@ -1,0 +1,6 @@
+[package]
+name = "rt-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
