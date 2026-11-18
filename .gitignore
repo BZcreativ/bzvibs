@@ -3,3 +3,4 @@ target/
 stream_head.bin
 prototypes/pa-api/bin/
 .mimosa/
+dist/
