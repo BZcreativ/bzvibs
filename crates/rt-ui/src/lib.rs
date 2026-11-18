@@ -99,9 +99,23 @@ impl Default for RustyTube {
     }
 }
 
+/// What the stage loads on first open, so the app never greets an empty
+/// queue. Chips in the right panel map onto moods later; the default is
+/// deliberately broad.
+pub const DEFAULT_QUERY: &str = "today's hits";
+
 impl RustyTube {
     pub fn new() -> Self {
         RustyTube::default()
+    }
+
+    /// Boot with content already loading: the default query fills the stage
+    /// and the queue without a keystroke.
+    pub fn boot() -> (RustyTube, Task<Message>) {
+        let mut app = RustyTube::new();
+        app.search_query = DEFAULT_QUERY.to_string();
+        let task = app.update(Message::SearchSubmitted);
+        (app, task)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -199,7 +213,7 @@ impl RustyTube {
 
 /// Open the RustyTube window. Blocks until the window closes.
 pub fn run() -> Result {
-    iced::application(RustyTube::new, RustyTube::update, RustyTube::view)
+    iced::application(RustyTube::boot, RustyTube::update, RustyTube::view)
         .title("RustyTube")
         .window(iced::window::Settings {
             size: iced::Size::new(1280.0, 800.0),

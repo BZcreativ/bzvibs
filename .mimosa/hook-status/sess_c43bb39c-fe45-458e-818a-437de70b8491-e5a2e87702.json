@@ -1,14 +1,14 @@
 {
   "schemaVersion": "mimosa-hook-status/v1",
-  "recordedAt": "2026-11-18T21:12:59.397Z",
+  "recordedAt": "2026-11-18T21:34:57.124Z",
   "sessionId": "sess_c43bb39c-fe45-458e-818a-437de70b8491",
   "event": "PostToolUse",
   "toolName": "Edit",
-  "file": "crates/rt-ui/src/lib.rs",
+  "file": "crates/rustytube/examples/dpi_probe.rs",
   "outcome": "clear",
   "coverage": "complete",
   "findingCount": 0,
-  "durationMs": 28,
+  "durationMs": 29,
   "hostState": "hook_complete",
   "reportHint": ".mimosa/reports/"
 }
