@@ -1,14 +1,14 @@
 {
   "schemaVersion": "mimosa-hook-status/v1",
-  "recordedAt": "2026-11-18T18:39:32.391Z",
+  "recordedAt": "2026-11-18T18:59:20.136Z",
   "sessionId": "sess_c43bb39c-fe45-458e-818a-437de70b8491",
   "event": "PostToolUse",
   "toolName": "Edit",
-  "file": "crates/rt-audio/src/dsp.rs",
+  "file": "crates/rt-audio/examples/play_file.rs",
   "outcome": "clear",
   "coverage": "complete",
   "findingCount": 0,
-  "durationMs": 26,
+  "durationMs": 49,
   "hostState": "hook_complete",
   "reportHint": ".mimosa/reports/"
 }

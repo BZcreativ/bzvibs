@@ -6,5 +6,7 @@ edition.workspace = true
 [dependencies]
 arc-swap = "1"
 biquad = "0.6"
+cpal = "0.18.2"
+rtrb = "0.4.1"
 symphonia = { version = "0.6", features = ["aac", "isomp4"] }
 thiserror = "2"
