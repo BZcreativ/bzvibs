@@ -126,8 +126,13 @@ fn prefs_file() -> PathBuf {
 /// Load saved prefs, or defaults when absent. A corrupt file falls back to
 /// defaults rather than failing the app boot.
 pub fn load() -> UiPrefs {
-    let path = prefs_file();
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    load_from(&prefs_file())
+}
+
+/// Load from an explicit file. Tests use this so they never mutate the
+/// process environment (parallel tests raced on APPDATA).
+pub fn load_from(path: &std::path::Path) -> UiPrefs {
+    let Ok(text) = std::fs::read_to_string(path) else {
         return UiPrefs::default();
     };
     match serde_json::from_str(&text) {
@@ -141,15 +146,18 @@ pub fn load() -> UiPrefs {
 
 /// Persist prefs. Called on every change from the settings screen.
 pub fn store(prefs: &UiPrefs) -> Result<(), super::PresetError> {
-    let path = prefs_file();
+    store_to(&prefs_file(), prefs)
+}
+
+pub fn store_to(path: &std::path::Path, prefs: &UiPrefs) -> Result<(), super::PresetError> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let json = serde_json::to_string_pretty(prefs).map_err(|e| super::PresetError::BadFile {
-        path: path.clone(),
+        path: path.to_path_buf(),
         reason: e.to_string(),
     })?;
-    std::fs::write(&path, json)?;
+    std::fs::write(path, json)?;
     Ok(())
 }
 
@@ -166,10 +174,6 @@ mod tests {
             N.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        // SAFETY: confined to this test process; each test gets a unique dir.
-        unsafe {
-            std::env::set_var("APPDATA", &dir);
-        }
         f(&dir);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -184,30 +188,30 @@ mod tests {
 
     #[test]
     fn store_then_load_round_trips() {
-        with_temp_dir(|_| {
+        with_temp_dir(|dir| {
+            let file = dir.join("ui-prefs.json");
             let p = UiPrefs {
                 font: FontChoice::System,
                 text_size: TextSize::ExtraLarge,
             };
-            store(&p).unwrap();
-            assert_eq!(load(), p);
+            store_to(&file, &p).unwrap();
+            assert_eq!(load_from(&file), p);
         });
     }
 
     #[test]
     fn missing_file_yields_defaults() {
-        with_temp_dir(|_| {
-            assert_eq!(load(), UiPrefs::default());
+        with_temp_dir(|dir| {
+            assert_eq!(load_from(&dir.join("absent.json")), UiPrefs::default());
         });
     }
 
     #[test]
     fn corrupt_file_yields_defaults_not_a_crash() {
         with_temp_dir(|dir| {
-            let file = dir.join("bzvibs").join("ui-prefs.json");
-            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            let file = dir.join("ui-prefs.json");
             std::fs::write(&file, "{ broken").unwrap();
-            assert_eq!(load(), UiPrefs::default());
+            assert_eq!(load_from(&file), UiPrefs::default());
         });
     }
 

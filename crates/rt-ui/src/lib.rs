@@ -69,6 +69,13 @@ pub enum Message {
     NewPlaylistSubmitted,
     NewPlaylistCreated(std::result::Result<String, String>),
     KeyPressed(iced::keyboard::Key, iced::keyboard::Modifiers),
+    BrowserCookieChanged(String),
+    BrowserSignInPressed,
+    BrowserSignInDone(
+        std::result::Result<(Arc<rt_api::AuthedClient>, Vec<rt_api::PlaylistBrief>), String>,
+    ),
+    OauthInsteadPressed,
+    AuthSetupCancel,
     HelpToggled,
     ErrorDismissed,
     OauthIdChanged(String),
@@ -182,6 +189,9 @@ pub struct RustyTube {
     pub auth_loading: bool,
     /// OAuth client setup card: `Some((id, secret))` while it is open.
     pub auth_setup: Option<(String, String)>,
+    /// Cookie paste card: `Some(text)` while it is open. This is the
+    /// primary sign-in path (no Google Cloud project needed).
+    pub browser_cookie: Option<String>,
     pub authed: Option<Arc<rt_api::AuthedClient>>,
     pub player: Option<PlayerHandle>,
     pub api: Option<Arc<ApiClient>>,
@@ -217,6 +227,7 @@ impl Default for RustyTube {
             auth: AuthState::SignedOut,
             auth_loading: false,
             auth_setup: None,
+            browser_cookie: None,
             active_chip: 0,
             new_playlist: None,
             typing: false,
@@ -275,40 +286,57 @@ impl RustyTube {
             async { rt_config::list_user() },
             Message::EqUserPresetsLoaded,
         );
-        // Restore a previous session from the OS credential store.
-        let auth = match rt_api::load_token() {
-            Ok(Some(token)) => match rt_api::AuthedClient::new(token) {
-                Ok(client) => {
+        // Restore a previous session from the OS credential store. The
+        // browser-cookie credential is tried first (the primary path); its
+        // restore is async because the client fetches the session version.
+        let auth = if let Some(cookie) = rt_api::load_browser_cookie() {
+            app.auth = AuthState::SignedIn {
+                playlists: Vec::new(),
+            };
+            Task::perform(
+                async move {
+                    let client = rt_api::AuthedClient::from_browser_cookie(&cookie).await?;
                     let client = Arc::new(client);
-                    app.authed = Some(client.clone());
-                    app.auth = AuthState::SignedIn {
-                        playlists: Vec::new(),
-                    };
-                    Task::perform(
-                        async move {
-                            client
-                                .playlists()
-                                .await
-                                .map(|b| (client, b))
-                                .map_err(|e| e.to_string())
-                        },
-                        |r| match r {
-                            Ok((client, playlists)) => {
-                                Message::AuthCompleted(Ok((client, playlists)))
-                            }
-                            Err(e) => Message::AuthCompleted(Err(e)),
-                        },
-                    )
-                }
+                    let playlists = client.playlists().await.map_err(|e| e.to_string())?;
+                    Ok((client, playlists))
+                },
+                Message::BrowserSignInDone,
+            )
+        } else {
+            match rt_api::load_token() {
+                Ok(Some(token)) => match rt_api::AuthedClient::new(token) {
+                    Ok(client) => {
+                        let client = Arc::new(client);
+                        app.authed = Some(client.clone());
+                        app.auth = AuthState::SignedIn {
+                            playlists: Vec::new(),
+                        };
+                        Task::perform(
+                            async move {
+                                client
+                                    .playlists()
+                                    .await
+                                    .map(|b| (client, b))
+                                    .map_err(|e| e.to_string())
+                            },
+                            |r| match r {
+                                Ok((client, playlists)) => {
+                                    Message::AuthCompleted(Ok((client, playlists)))
+                                }
+                                Err(e) => Message::AuthCompleted(Err(e)),
+                            },
+                        )
+                    }
+                    Err(e) => {
+                        app.status.error = Some(format!("stored sign-in: {e}"));
+                        Task::none()
+                    }
+                },
+                Ok(None) => Task::none(),
                 Err(e) => {
-                    app.status.error = Some(format!("stored sign-in: {e}"));
+                    app.status.error = Some(format!("credential store: {e}"));
                     Task::none()
                 }
-            },
-            Ok(None) => Task::none(),
-            Err(e) => {
-                app.status.error = Some(format!("credential store: {e}"));
-                Task::none()
             }
         };
         (app, Task::batch([search, presets, auth]))
@@ -359,23 +387,61 @@ impl RustyTube {
                 if !matches!(self.auth, AuthState::SignedOut) {
                     return Task::none();
                 }
-                // No client credentials anywhere: open the in-app setup card
-                // instead of failing with an instruction the user cannot act
-                // on. Credentials saved there go to the OS keychain.
-                if rt_api::needs_client_setup() {
-                    self.auth_setup = Some((String::new(), String::new()));
-                    self.status.error = None;
+                // Primary path: paste the browser session cookies. No
+                // Google Cloud project, no environment variables.
+                self.auth_setup = None;
+                self.browser_cookie = Some(String::new());
+                self.status.error = None;
+            }
+            Message::BrowserCookieChanged(v) => {
+                self.browser_cookie = Some(v);
+            }
+            Message::OauthInsteadPressed => {
+                self.browser_cookie = None;
+                self.auth_setup = Some((String::new(), String::new()));
+            }
+            Message::AuthSetupCancel => {
+                self.auth_setup = None;
+                self.browser_cookie = None;
+            }
+            Message::BrowserSignInPressed => {
+                let raw = self.browser_cookie.clone().unwrap_or_default();
+                let Some(cookie) = rt_api::extract_cookie(&raw) else {
+                    self.status.error = Some("paste the cookie header first".to_string());
+                    return Task::none();
+                };
+                if let Err(e) = rt_api::validate_cookie(&cookie) {
+                    self.status.error = Some(e);
                     return Task::none();
                 }
                 self.auth_loading = true;
                 self.status.error = None;
+                let stored = cookie.clone();
                 return Task::perform(
-                    async {
-                        let (id, secret) = rt_api::credentials_from_env()?;
-                        rt_api::begin_sign_in(id, secret).await.map(Arc::new)
+                    async move {
+                        let client = rt_api::AuthedClient::from_browser_cookie(&cookie).await?;
+                        // Persist only after the credential proved usable.
+                        if let Err(e) = rt_api::store_browser_cookie(&stored) {
+                            eprintln!("[auth] cookie store failed: {e}");
+                        }
+                        let client = Arc::new(client);
+                        let playlists = client.playlists().await.map_err(|e| e.to_string())?;
+                        Ok((client, playlists))
                     },
-                    Message::AuthSessionArrived,
+                    Message::BrowserSignInDone,
                 );
+            }
+            Message::BrowserSignInDone(Ok((client, playlists))) => {
+                self.auth_loading = false;
+                self.browser_cookie = None;
+                self.authed = Some(client);
+                self.auth = AuthState::SignedIn { playlists };
+                self.status.error = None;
+            }
+            Message::BrowserSignInDone(Err(e)) => {
+                eprintln!("[auth] browser sign-in failed: {e}");
+                self.auth_loading = false;
+                self.status.error = Some(format!("sign-in: {e}"));
             }
             Message::OauthIdChanged(v) => {
                 if let Some((id, _)) = &mut self.auth_setup {
@@ -460,6 +526,8 @@ impl RustyTube {
                 if let Err(e) = rt_api::clear_token() {
                     self.status.error = Some(format!("disconnect: {e}"));
                 }
+                // Drop whichever credential was in use.
+                rt_api::clear_browser_cookie();
                 self.auth = AuthState::SignedOut;
                 self.authed = None;
                 self.auth_session = None;

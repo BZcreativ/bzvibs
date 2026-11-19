@@ -163,8 +163,12 @@ impl SignInSession {
 
 /// Step 3: the authenticated client. Opaque on purpose — the UI never
 /// sees ytmapi-rs types.
-pub struct AuthedClient {
-    inner: YtMusic<OAuthToken>,
+///
+/// Two credentials work: the cookies of a signed-in browser session (the
+/// zero-setup path, no Google Cloud project), or an OAuth device token.
+pub enum AuthedClient {
+    Browser(YtMusic<ytmapi_rs::auth::browser::BrowserToken>),
+    OAuth(YtMusic<OAuthToken>),
 }
 
 impl std::fmt::Debug for AuthedClient {
@@ -173,17 +177,74 @@ impl std::fmt::Debug for AuthedClient {
     }
 }
 
+/// Pull the cookie header out of whatever the user pasted: the raw cookie
+/// string, a pasted request-headers block, or a "Copy as cURL" command.
+pub fn extract_cookie(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    for line in trimmed.lines() {
+        let line = line.trim();
+        let lower = line.to_ascii_lowercase();
+        if let Some(pos) = lower.find("cookie:") {
+            let rest = &line[pos + "cookie:".len()..];
+            // A cURL paste wraps the header in quotes; a cookie value never
+            // contains one, so the first quote ends the value.
+            let end = rest.find(['\'', '"']).unwrap_or(rest.len());
+            let value = rest[..end].trim().to_string();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    Some(trimmed.to_string())
+}
+
+/// Cookies must carry SAPISID; without it signed requests are treated as
+/// logged out.
+pub fn validate_cookie(cookie: &str) -> Result<(), String> {
+    if cookie.contains("SAPISID=") {
+        Ok(())
+    } else if cookie.contains("__Secure-3PAPISID=") {
+        Err(
+            "that cookie has __Secure-3PAPISID but not SAPISID. Copy the cookie \
+             header from a request made while signed in at music.youtube.com."
+                .to_string(),
+        )
+    } else {
+        Err(
+            "that does not look like a signed-in cookie: SAPISID is missing. Open \
+             music.youtube.com signed in, press F12, open Network, click a request \
+             and copy its 'cookie' request header."
+                .to_string(),
+        )
+    }
+}
+
 impl AuthedClient {
+    /// Sign in with a browser session's cookie header. No Google Cloud
+    /// project is involved, which is why this is the primary path.
+    pub async fn from_browser_cookie(cookie: &str) -> Result<Self, String> {
+        validate_cookie(cookie)?;
+        let builder = YtMusicBuilder::new().with_browser_token_cookie(cookie.to_string());
+        let client = builder.build().await.map_err(|e| e.to_string())?;
+        Ok(AuthedClient::Browser(client))
+    }
+
     pub fn new(token: OAuthToken) -> Result<Self, ApiError> {
         let builder = YtMusicBuilder::new().with_auth_token(token);
         // UFCS: pick the sync build over the async bootstrap build.
         let inner = YtMusicBuilder::<OAuthToken>::build(builder)?;
-        Ok(AuthedClient { inner })
+        Ok(AuthedClient::OAuth(inner))
     }
 
     /// Sidebar briefs for the signed-in account's playlists.
     pub async fn playlists(&self) -> Result<Vec<PlaylistBrief>, ApiError> {
-        let lists = self.inner.get_library_playlists().await?;
+        let lists = match self {
+            AuthedClient::Browser(c) => c.get_library_playlists().await?,
+            AuthedClient::OAuth(c) => c.get_library_playlists().await?,
+        };
         Ok(lists.into_iter().map(PlaylistBrief::from).collect())
     }
 
@@ -191,11 +252,12 @@ impl AuthedClient {
     /// entries (videos) map with their channel as the artist.
     pub async fn playlist_tracks(&self, playlist_id: &str) -> Result<Vec<crate::Track>, String> {
         let id = crate::PlaylistID::from_raw(playlist_id.to_string());
-        let items = self
-            .inner
-            .get_playlist_tracks(id)
-            .await
-            .map_err(|e| e.to_string())?;
+        let items = match self {
+            AuthedClient::Browser(c) => {
+                c.get_playlist_tracks(id).await.map_err(|e| e.to_string())?
+            }
+            AuthedClient::OAuth(c) => c.get_playlist_tracks(id).await.map_err(|e| e.to_string())?,
+        };
         Ok(items
             .into_iter()
             .filter_map(|item| match item {
@@ -230,11 +292,12 @@ impl AuthedClient {
             None,
             ytmapi_rs::query::playlist::PrivacyStatus::Private,
         );
-        let id = self
-            .inner
-            .create_playlist(query)
-            .await
-            .map_err(|e| e.to_string())?;
+        let id = match self {
+            AuthedClient::Browser(c) => {
+                c.create_playlist(query).await.map_err(|e| e.to_string())?
+            }
+            AuthedClient::OAuth(c) => c.create_playlist(query).await.map_err(|e| e.to_string())?,
+        };
         Ok(id.get_raw().to_string())
     }
 }
@@ -245,6 +308,27 @@ const KEYRING_SERVICE: &str = "bzvibs";
 const KEYRING_USER: &str = "youtube-oauth-token";
 const KEYRING_CLIENT_ID: &str = "oauth-client-id";
 const KEYRING_CLIENT_SECRET: &str = "oauth-client-secret";
+const KEYRING_COOKIE: &str = "browser-cookie";
+
+/// Persist a browser cookie header so the session restores on next launch.
+pub fn store_browser_cookie(cookie: &str) -> Result<(), StoreError> {
+    keyring::Entry::new(KEYRING_SERVICE, KEYRING_COOKIE)?.set_password(cookie.trim())?;
+    Ok(())
+}
+
+pub fn load_browser_cookie() -> Option<String> {
+    keyring::Entry::new(KEYRING_SERVICE, KEYRING_COOKIE)
+        .ok()?
+        .get_password()
+        .ok()
+        .filter(|c| !c.trim().is_empty())
+}
+
+pub fn clear_browser_cookie() {
+    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_COOKIE) {
+        let _ = entry.delete_credential();
+    }
+}
 
 /// Persist the OAuth client id and secret in the OS credential store. The
 /// app then signs in without any environment variables.
@@ -350,5 +434,33 @@ mod tests {
         // PartialEq on OAuthToken confirms the round trip preserved it.
         assert_eq!(back, token);
         let _ = entry.delete_credential();
+    }
+
+    #[test]
+    fn extract_cookie_handles_raw_header_and_curl_pastes() {
+        let raw = "YSC=abc; SAPISID=xyz; __Secure-3PAPISID=def";
+        assert_eq!(extract_cookie(raw).as_deref(), Some(raw));
+
+        let headers = "accept: */*\ncookie: YSC=abc; SAPISID=xyz\naccept-language: en";
+        assert_eq!(
+            extract_cookie(headers).as_deref(),
+            Some("YSC=abc; SAPISID=xyz")
+        );
+
+        let curl = "curl 'https://music.youtube.com/' -H 'cookie: YSC=1; SAPISID=2' -H 'x: y'";
+        assert_eq!(extract_cookie(curl).as_deref(), Some("YSC=1; SAPISID=2"));
+
+        assert_eq!(extract_cookie("   "), None);
+    }
+
+    #[test]
+    fn validate_cookie_requires_sapisid_and_explains_failures() {
+        assert!(validate_cookie("YSC=1; SAPISID=2; HSID=3").is_ok());
+        // The modern cookie name alone is not enough.
+        let e = validate_cookie("YSC=1; __Secure-3PAPISID=2").unwrap_err();
+        assert!(e.contains("SAPISID"), "{e}");
+        // Random text is rejected with instructions.
+        let e = validate_cookie("hello world").unwrap_err();
+        assert!(e.contains("F12"), "{e}");
     }
 }

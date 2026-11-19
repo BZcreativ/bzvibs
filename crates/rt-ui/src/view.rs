@@ -630,12 +630,95 @@ fn library_stage(app: &RustyTube) -> Element<'static, Message> {
             ]
             .spacing(14)
             .padding(24);
+            if app.browser_cookie.is_some() {
+                col = col.push(browser_cookie_card(app));
+            }
             if app.auth_setup.is_some() {
                 col = col.push(oauth_setup_card(app));
             }
             col.into()
         }
     }
+}
+
+/// Primary sign-in: paste the browser session's cookie header. This is the
+/// method that needs no Google Cloud project, so it is the default path.
+fn browser_cookie_card(app: &RustyTube) -> Element<'static, Message> {
+    let p = theme::at(app.theme_index);
+    let value = app.browser_cookie.clone().unwrap_or_default();
+
+    let input = text_input("cookie: YSC=…; SAPISID=…; __Secure-3PAPISID=…", &value)
+        .on_input(Message::BrowserCookieChanged)
+        .on_submit(Message::BrowserSignInPressed)
+        .size(11)
+        .padding([6, 10])
+        .style(move |_t, _s| text_input::Style {
+            background: Color::from_rgba(0.0, 0.0, 0.0, 0.4).into(),
+            border: pill_border(p.bg_card_active),
+            icon: p.text_dim,
+            placeholder: p.text_dim,
+            value: p.text,
+            selection: p.accent,
+        });
+
+    let step = |n: &'static str, body: &'static str| {
+        text(format!("{n} {body}")).size(10).color(p.text_dim)
+    };
+
+    let card = column![
+        text("Sign in with your browser session").size(16).color(p.text),
+        step("1.", "Open music.youtube.com in your browser and sign in."),
+        step("2.", "Press F12 → Network → click any request."),
+        step("3.", "Find the 'cookie' request header and copy its value."),
+        step("4.", "Paste it here and press Sign in."),
+        text("No Google Cloud project is needed. The cookie is stored in the Windows credential store and can be removed with Disconnect.")
+            .size(10)
+            .color(p.accent),
+        input,
+        row![
+            text_button(
+                p,
+                if app.auth_loading {
+                    "Signing in…".to_string()
+                } else {
+                    "Sign in".to_string()
+                },
+                ButtonKind::Primary,
+                !app.auth_loading,
+                Message::BrowserSignInPressed,
+            ),
+            text_button(
+                p,
+                "Use OAuth instead".into(),
+                ButtonKind::Ghost,
+                true,
+                Message::OauthInsteadPressed,
+            ),
+            text_button(
+                p,
+                "Cancel".into(),
+                ButtonKind::Ghost,
+                true,
+                Message::AuthSetupCancel,
+            ),
+        ]
+        .spacing(8),
+    ]
+    .spacing(10)
+    .padding(18);
+
+    container(card)
+        .width(Length::Fixed(520.0))
+        .style(move |_t| container::Style {
+            background: Some(Background::Color(p.bg_card)),
+            border: Border {
+                radius: 14.0.into(),
+                color: p.accent,
+                width: 1.0,
+            },
+            ..container::Style::default()
+        })
+        .into()
 }
 
 /// In-app OAuth client setup: the credentials a user must create in Google
