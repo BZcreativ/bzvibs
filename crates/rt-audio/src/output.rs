@@ -26,16 +26,28 @@ pub enum OutputError {
     Cpal(#[from] cpal::Error),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Shared {
     paused: AtomicBool,
     /// Discard everything currently buffered. Set from any thread; the
     /// callback honors it before anything else so a paused ring can still
     /// be drained.
     flush: AtomicBool,
-    /// 0..=1000, applied in the callback before the EQ.
+    /// 0..=1000, applied in the callback before the EQ. Full volume by
+    /// default: a derived Default would be 0 and silently mute playback.
     volume_milli: AtomicU32,
     underruns: AtomicU64,
+}
+
+impl Default for Shared {
+    fn default() -> Self {
+        Shared {
+            paused: AtomicBool::new(false),
+            flush: AtomicBool::new(false),
+            volume_milli: AtomicU32::new(1000),
+            underruns: AtomicU64::new(0),
+        }
+    }
 }
 
 /// The pure callback body, separated from cpal so tests can drive it.
@@ -75,6 +87,7 @@ fn fill(
 
 pub struct Player {
     spec: DeviceSpec,
+    tap: Option<rtrb::Consumer<f32>>,
     capacity: usize,
     shared: Arc<Shared>,
     producer: rtrb::Producer<f32>,
@@ -104,10 +117,15 @@ impl Player {
         let capacity = 2 * rate as usize * channels as usize;
         let (producer, mut consumer) = rtrb::RingBuffer::new(capacity.max(4096));
 
+        // The visualizer tap: callback-side producer, UI-side consumer.
+        let (tap_producer, tap_consumer) = rtrb::RingBuffer::new(crate::tap::TAP_CAPACITY);
+
         let shared = Arc::new(Shared::default());
         let shared_cb = shared.clone();
         let mut eq = Eq8::new(rate, channels as usize);
         let eq_handle = eq.handle();
+        let mut tap = tap_producer;
+        let tap_channels = channels as usize;
 
         let stream = device.build_output_stream(
             stream_config,
@@ -124,12 +142,27 @@ impl Player {
                     volume,
                     &shared_cb.underruns,
                 );
+                // Post-EQ mono mixdown into the tap ring; drops on overflow
+                // are fine for analysis. No locks, no allocation.
+                if !paused {
+                    for frame in data.chunks_mut(tap_channels.max(1)) {
+                        let mut mono = 0.0f32;
+                        for s in frame.iter() {
+                            mono += *s;
+                        }
+                        mono /= frame.len() as f32;
+                        if tap.push(mono).is_err() {
+                            break;
+                        }
+                    }
+                }
             },
             |err| eprintln!("audio stream error: {err}"),
             None,
         )?;
         Ok(Player {
             spec: DeviceSpec { rate, channels },
+            tap: Some(tap_consumer),
             capacity,
             shared,
             producer,
@@ -143,6 +176,12 @@ impl Player {
     pub fn start(&self) -> Result<(), OutputError> {
         self.stream.play()?;
         Ok(())
+    }
+
+    /// Hand the tap consumer to the UI side (once). The callback keeps
+    /// producing into it.
+    pub fn take_tap(&mut self) -> Option<rtrb::Consumer<f32>> {
+        self.tap.take()
     }
 
     /// Ask the callback to discard everything currently buffered. Takes
@@ -246,6 +285,18 @@ mod tests {
 
     fn eq_mono_44k() -> Eq8 {
         Eq8::new(44_100, 1)
+    }
+
+    #[test]
+    fn default_volume_is_full_not_mute() {
+        // Regression: a derived Default made volume_milli 0, silently
+        // muting the whole app while playback math kept advancing.
+        let shared = Shared::default();
+        assert_eq!(
+            shared.volume_milli.load(Ordering::Relaxed),
+            1000,
+            "default volume must be 1000/1000"
+        );
     }
 
     #[test]

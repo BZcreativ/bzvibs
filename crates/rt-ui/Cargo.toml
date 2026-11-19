@@ -4,7 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-iced = { version = "0.14", features = ["tiny-skia", "tokio"] }
+iced = { version = "0.14", features = ["canvas", "tiny-skia", "tokio"] }
 rt-api.workspace = true
+rt-audio = { version = "0.1.0", path = "../rt-audio" }
 rt-config.workspace = true
 rt-player.workspace = true

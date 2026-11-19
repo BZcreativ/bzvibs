@@ -184,41 +184,36 @@ fn mode_pills(app: &RustyTube) -> Element<'static, Message> {
 fn visualizer_card(app: &RustyTube) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let transport = app.status.transport.clone();
-    let inner = match &transport {
-        TransportState::Loading(what) => column![
+    let loading = matches!(transport, TransportState::Loading(_));
+    let active = transport == TransportState::Playing;
+
+    // Caption line under the ring.
+    let caption = match &transport {
+        TransportState::Loading(what) => format!("loading {what}…"),
+        TransportState::Playing => String::new(),
+        TransportState::Paused => "paused".to_string(),
+        TransportState::Stopped => "search to fill this stage".to_string(),
+    };
+
+    let ring = crate::visualizer::SpectrumRing::new(app.spectrum.clone(), p, active).view();
+
+    let mut inner = column![].spacing(8).align_x(Alignment::Center);
+    if loading {
+        inner = inner.push(
             text("bzvibs")
-                .size(28)
+                .size(20)
                 .color(p.text_dim)
                 .font(iced::Font::MONOSPACE),
-            text(format!("loading {what}…")).size(12).color(p.accent),
-        ],
-        TransportState::Playing | TransportState::Paused => column![
-            text("bzvibs")
-                .size(28)
-                .color(p.accent)
-                .font(iced::Font::MONOSPACE),
-            text(if transport == TransportState::Playing {
-                "visualizer arrives with PR-12"
-            } else {
-                "paused"
-            })
-            .size(11)
-            .color(p.text_dim),
-        ],
-        TransportState::Stopped => column![
-            text("bzvibs")
-                .size(28)
-                .color(p.accent_soft)
-                .font(iced::Font::MONOSPACE),
-            text("search to fill this stage").size(11).color(p.text_dim),
-        ],
+        );
     }
-    .spacing(8)
-    .align_x(Alignment::Center);
+    inner = inner.push(container(ring).width(300).height(300));
+    if !caption.is_empty() {
+        inner = inner.push(text(caption).size(11).color(p.text_dim));
+    }
 
     container(inner)
         .width(340)
-        .height(340)
+        .height(360)
         .align_x(iced::alignment::Horizontal::Center)
         .align_y(iced::alignment::Vertical::Center)
         .style(move |_t| container::Style {

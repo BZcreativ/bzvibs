@@ -191,11 +191,38 @@ fn play(video_id: &str) {
         "after_eq position_secs: {:.1}  underruns: {}",
         s2.position_secs, s2.underruns
     );
+
+    // Visualizer live box: the tap must carry post-EQ audio while playing.
+    // Drain continuously like the UI does — the tap ring only holds ~93 ms.
+    let mut analyzer = rt_audio::SpectrumAnalyzer::new();
+    let mut buf = vec![0.0f32; rt_audio::ANALYSIS_LEN];
+    for _ in 0..15 {
+        std::thread::sleep(Duration::from_millis(100));
+        handle.drain_tap(&mut buf);
+    }
+    let n = handle.drain_tap(&mut buf);
+    let peak = buf[..n].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    println!("tap_peak_amplitude: {peak:.4}");
+    let mut bands = [0.0f32; rt_audio::BAND_COUNT];
+    analyzer.analyze(&buf[..n], handle.device_rate(), &mut bands);
+    let energy: f32 = bands.iter().sum();
+    let top = bands
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.total_cmp(b.1))
+        .unwrap()
+        .0;
+    println!(
+        "tap_samples: {n}  spectrum_energy: {energy:.1}  top_band_hz: {:.0}",
+        rt_audio::band_center_hz(top, rt_audio::BAND_COUNT)
+    );
     handle.send(rt_player::Cmd::Shutdown);
     let ok = s.position_secs > 5.0
         && s.underruns == 0
         && s2.position_secs > pos_before
-        && s2.underruns == 0;
+        && s2.underruns == 0
+        && n > 0
+        && energy > 1.0;
     println!("{}", if ok { "PASS" } else { "FAIL" });
     if !ok {
         std::process::exit(1);

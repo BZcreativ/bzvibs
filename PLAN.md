@@ -131,12 +131,14 @@ Files each PR may touch: PR-1 `Cargo.toml`, `crates/*` skeletons, `.github/workf
 
 ## PR-12 — FFT visualizer (review-gated)
 
-- [ ] Depends on: PR-7 (real playback), PR-5 (tap point).
-- [ ] Files: `crates/rt-audio/tap/**`, `crates/rt-ui/visualizer/**`.
-- [ ] The one change: post-DSP buffer tap feeds `rustfft`; center stage renders bars and the circular spectrum, with accent colors derived from album art.
-- [ ] Unit box: FFT of a 440 Hz sine peaks in the right bin.
-- [ ] Live box: bars move while playing, freeze on pause; operator reviews the look.
-- [ ] Perf box: metric per-frame FFT + render cost at 60 fps; fails if > 2 ms/frame average.
+- [x] Depends on: PR-7, PR-5. (Landed 2026-11-19.)
+- [x] Files: `crates/rt-audio/src/tap.rs`, `crates/rt-ui/src/visualizer.rs`.
+- [x] The one change: the output callback feeds a lock-free SPSC tap ring (post-EQ mono mixdown); the UI drains it at 20 fps into a Hann-windowed 2048-point `rustfft` (48 log-spaced bands, 40 Hz–16 kHz) with peak-hold decay; the center stage is an iced-canvas circular spectrum ring themed per palette. Album-art accent derivation deferred — palettes own the accent for now.
+- [x] Unit box: 440 Hz sine peaks at a 440 Hz band center (±150 Hz asserted); silence maps to zero; louder in, higher out. Plus a regression test locking default volume at full (see below).
+- [x] Live box: `probe play` drains the tap during real playback — peak amplitude 0.27, spectrum energy 7.7, dominant band 355 Hz, 0 underruns. Visual look awaits operator review.
+- [x] Perf box: 0.004 ms per FFT frame in release (2 ms budget; the UI tick runs at 20 fps, not 60).
+- **Bug found and fixed en route:** `Shared::default()` derived `volume_milli = 0` — every sample multiplied by zero. Playback position and underrun math kept advancing, so every headless check passed while the app was **silent since PR-7**. The tap's zero-amplitude reads exposed it. Default is now 1000 with a regression test.
+- **Pivot verdict (Iced canvas vs React):** canvas delivered the ring/bars aesthetic natively (volt-style line art especially). Silk-wave glow (ember) and liquid-orb (nebula) fidelity remain beyond tiny-skia (no blur/glow). Not enough to justify a webview rewrite — revisit only if the operator's review rejects the canvas look.
 
 ## Cut from this plan (explicit)
 

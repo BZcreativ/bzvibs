@@ -66,6 +66,12 @@ pub enum Cmd {
     Shutdown,
 }
 
+struct BootInfo {
+    eq: Option<rt_audio::EqHandle>,
+    tap: Option<rtrb::Consumer<f32>>,
+    rate: u32,
+}
+
 enum Internal {
     Loaded {
         video_id: String,
@@ -84,6 +90,10 @@ pub struct PlayerHandle {
     /// Clone of the engine's EQ handle, handed back during spawn; None only
     /// when the output device failed to open before the handshake.
     eq: Option<rt_audio::EqHandle>,
+    /// The visualizer tap consumer (callback-side producer). Mutex is
+    /// UI-side only; the audio callback never touches it.
+    tap: Option<Arc<std::sync::Mutex<rtrb::Consumer<f32>>>>,
+    device_rate: u32,
 }
 
 impl PlayerHandle {
@@ -91,21 +101,53 @@ impl PlayerHandle {
         let (tx, rx) = std::sync::mpsc::channel::<Cmd>();
         let status = Arc::new(Mutex::new(Status::default()));
         let status_thread = status.clone();
-        let (boot_tx, boot_rx) = std::sync::mpsc::channel::<Option<rt_audio::EqHandle>>();
+        let (boot_tx, boot_rx) = std::sync::mpsc::channel::<BootInfo>();
         std::thread::Builder::new()
             .name("rt-player".into())
             .spawn(move || engine(rx, status_thread, boot_tx))
             .map_err(|e| format!("player thread spawn: {e}"))?;
-        let eq = boot_rx
+        let boot = boot_rx
             .recv_timeout(Duration::from_secs(5))
             .map_err(|e| format!("engine boot handshake: {e}"))?;
-        Ok(PlayerHandle { tx, status, eq })
+        let rate = boot.rate;
+        Ok(PlayerHandle {
+            tx,
+            status,
+            eq: boot.eq,
+            tap: boot.tap.map(|t| Arc::new(std::sync::Mutex::new(t))),
+            device_rate: rate,
+        })
+    }
+
+    /// The output device sample rate (the tap's rate).
+    pub fn device_rate(&self) -> u32 {
+        self.device_rate
     }
 
     /// Live EQ control: store new gains from any thread; the audio callback
     /// picks them up on its next pass (lock-free, no glitch).
     pub fn eq(&self) -> Option<&rt_audio::EqHandle> {
         self.eq.as_ref()
+    }
+
+    /// Drain up to `buf.len()` samples from the tap, returning the count.
+    /// Call from the UI tick; safe at any rate.
+    pub fn drain_tap(&self, buf: &mut [f32]) -> usize {
+        let Some(tap) = &self.tap else { return 0 };
+        let Ok(mut consumer) = tap.lock() else {
+            return 0;
+        };
+        let mut n = 0;
+        for slot in buf.iter_mut() {
+            match consumer.pop() {
+                Ok(v) => {
+                    *slot = v;
+                    n += 1;
+                }
+                Err(_) => break,
+            }
+        }
+        n
     }
 
     pub fn status(&self) -> Status {
@@ -159,20 +201,31 @@ impl Feeder {
     }
 }
 
-fn engine(rx: Receiver<Cmd>, status: Arc<Mutex<Status>>, boot: Sender<Option<rt_audio::EqHandle>>) {
+fn engine(rx: Receiver<Cmd>, status: Arc<Mutex<Status>>, boot: Sender<BootInfo>) {
     let mut player = match Player::open() {
         Ok(p) => p,
         Err(e) => {
             if let Ok(mut s) = status.lock() {
                 s.error = Some(format!("output device: {e}"));
             }
-            let _ = boot.send(None);
+            let _ = boot.send(BootInfo {
+                eq: None,
+                tap: None,
+                rate: 44_100,
+            });
             return;
         }
     };
     let device = player.spec();
     let _ = player.start();
-    let _ = boot.send(Some(player.eq_handle()));
+    // Stay paused until the first track installs: an unpaused empty ring
+    // starves callbacks at boot (measured as spurious underruns).
+    player.pause();
+    let _ = boot.send(BootInfo {
+        eq: Some(player.eq_handle()),
+        tap: player.take_tap(),
+        rate: device.rate,
+    });
 
     let (itx, irx) = std::sync::mpsc::channel::<Internal>();
     // Loader thread with a current-thread runtime: resolve (yt-dlp child) +

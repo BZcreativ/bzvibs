@@ -4,6 +4,7 @@
 pub mod state;
 pub mod theme;
 pub mod view;
+pub mod visualizer;
 
 pub use state::{RightTab, Section, Transport, TransportEvent, transport_step};
 
@@ -116,6 +117,9 @@ pub struct RustyTube {
     pub eq: EqUiState,
     pub lyrics: Option<LyricsState>,
     lyrics_loading_for: Option<String>,
+    /// Smoothed visualizer bands (peak-hold decay), driven by the tap.
+    pub spectrum: Vec<f32>,
+    spectrum_analyzer: rt_audio::SpectrumAnalyzer,
     pub player: Option<PlayerHandle>,
     pub api: Option<Arc<ApiClient>>,
 }
@@ -144,6 +148,8 @@ impl Default for RustyTube {
             eq: EqUiState::default(),
             lyrics: None,
             lyrics_loading_for: None,
+            spectrum: vec![0.0; rt_audio::BAND_COUNT],
+            spectrum_analyzer: rt_audio::SpectrumAnalyzer::new(),
             player: PlayerHandle::spawn().ok(),
             api: ApiClient::new().ok().map(Arc::new),
         }
@@ -210,6 +216,33 @@ impl RustyTube {
             Message::Tick => {
                 if let Some(player) = &self.player {
                     self.status = player.status();
+                }
+                // Visualizer: drain the tap, analyze, smooth with decay so
+                // bars fall gracefully instead of flickering.
+                {
+                    let mut buf = vec![0.0f32; rt_audio::ANALYSIS_LEN];
+                    let n = self
+                        .player
+                        .as_ref()
+                        .map(|p| p.drain_tap(&mut buf))
+                        .unwrap_or(0);
+                    let playing = self.status.transport == rt_player::TransportState::Playing;
+                    if n > 0 && playing {
+                        let rate = self
+                            .player
+                            .as_ref()
+                            .map(|p| p.device_rate())
+                            .unwrap_or(44_100);
+                        let mut bands = [0.0f32; rt_audio::BAND_COUNT];
+                        self.spectrum_analyzer.analyze(&buf[..n], rate, &mut bands);
+                        for (s, b) in self.spectrum.iter_mut().zip(bands) {
+                            *s = (*s * 0.72).max(b);
+                        }
+                    } else {
+                        for s in self.spectrum.iter_mut() {
+                            *s *= 0.72;
+                        }
+                    }
                 }
                 // Load lyrics for whatever is playing, once per track.
                 let current = self.status.current.as_ref().map(|t| t.video_id.clone());
@@ -359,7 +392,8 @@ impl RustyTube {
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
-        iced::time::every(Duration::from_millis(250)).map(|_| Message::Tick)
+        // 20 fps: smooth visualizer decay without hammering the UI.
+        iced::time::every(Duration::from_millis(50)).map(|_| Message::Tick)
     }
 }
 
