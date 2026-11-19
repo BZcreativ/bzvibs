@@ -59,6 +59,14 @@ pub enum Message {
         std::result::Result<(Arc<rt_api::AuthedClient>, Vec<rt_api::PlaylistBrief>), String>,
     ),
     AuthDisconnectPressed,
+    /// Run the starter-mix search for a sidebar playlist / mood tile.
+    MoodSearch(String),
+    /// Select one of the right-panel filter chips.
+    ChipSelected(usize),
+    NewPlaylistModal(bool),
+    NewPlaylistNameChanged(String),
+    NewPlaylistSubmitted,
+    NewPlaylistCreated(std::result::Result<String, String>),
     Tick,
     PlayPressed,
     NextPressed,
@@ -150,6 +158,10 @@ pub struct RustyTube {
     pub spectrum: Vec<f32>,
     spectrum_analyzer: rt_audio::SpectrumAnalyzer,
     pub auth: AuthState,
+    /// Right-panel filter chip index; 0 is All.
+    pub active_chip: usize,
+    /// `Some(name)` while the New playlist dialog is open.
+    pub new_playlist: Option<String>,
     auth_session: Option<Arc<rt_api::SignInSession>>,
     pub authed: Option<Arc<rt_api::AuthedClient>>,
     pub player: Option<PlayerHandle>,
@@ -184,6 +196,8 @@ impl Default for RustyTube {
             spectrum: vec![0.0; rt_audio::BAND_COUNT],
             spectrum_analyzer: rt_audio::SpectrumAnalyzer::new(),
             auth: AuthState::SignedOut,
+            active_chip: 0,
+            new_playlist: None,
             auth_session: None,
             authed: None,
             player: PlayerHandle::spawn().ok(),
@@ -196,6 +210,27 @@ impl Default for RustyTube {
 /// queue. Chips in the right panel map onto moods later; the default is
 /// deliberately broad.
 pub const DEFAULT_QUERY: &str = "today's hits";
+
+/// Right-panel filter chips, index 0 is the unfiltered queue.
+pub const CHIPS: [&str; 5] = ["All", "Chill", "Focus", "Sleep", "Familiar"];
+
+/// Centre-stage mood tiles for Explore: (label, search query).
+pub const MOODS: [(&str, &str); 6] = [
+    ("Chill", "chill music"),
+    ("Focus", "focus music"),
+    ("Sleep", "sleep music"),
+    ("Workout", "workout music"),
+    ("Party", "party music"),
+    ("Relax", "relaxing music"),
+];
+
+/// Sidebar starter mixes shown before sign-in: (label, search query).
+pub const STARTER_MIXES: [(&str, &str); 4] = [
+    ("Focus Flow", "focus music"),
+    ("Late Night", "late night music"),
+    ("Chill Vibes", "chill music"),
+    ("Ambient", "ambient music"),
+];
 
 impl RustyTube {
     pub fn new() -> Self {
@@ -335,6 +370,72 @@ impl RustyTube {
                 self.auth = AuthState::SignedOut;
                 self.authed = None;
                 self.auth_session = None;
+            }
+            Message::MoodSearch(query) => {
+                // Sidebar starter mixes and Explore mood tiles are real
+                // searches, not placeholders.
+                self.search_query = query;
+                return self.update(Message::SearchSubmitted);
+            }
+            Message::ChipSelected(i) => {
+                self.active_chip = i;
+                let mood = CHIPS.get(i).copied().unwrap_or("All");
+                let query = if mood == "All" {
+                    DEFAULT_QUERY.to_string()
+                } else {
+                    format!("{mood} music")
+                };
+                self.search_query = query;
+                return self.update(Message::SearchSubmitted);
+            }
+            Message::NewPlaylistModal(open) => {
+                self.new_playlist = open.then(String::new);
+            }
+            Message::NewPlaylistNameChanged(name) => {
+                self.new_playlist = Some(name);
+            }
+            Message::NewPlaylistSubmitted => {
+                let name = self
+                    .new_playlist
+                    .take()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if name.is_empty() {
+                    self.status.error = Some("playlist name cannot be empty".to_string());
+                    return Task::none();
+                }
+                let Some(client) = self.authed.clone() else {
+                    self.status.error = Some("sign in with Google to create playlists".to_string());
+                    return Task::none();
+                };
+                return Task::perform(
+                    async move { client.create_playlist(&name).await },
+                    Message::NewPlaylistCreated,
+                );
+            }
+            Message::NewPlaylistCreated(Ok(_id)) => {
+                // Refresh the sidebar from the account so the new list shows.
+                if let Some(client) = self.authed.clone() {
+                    return Task::perform(
+                        async move {
+                            client
+                                .playlists()
+                                .await
+                                .map(|b| (client, b))
+                                .map_err(|e| e.to_string())
+                        },
+                        |r| match r {
+                            Ok((client, playlists)) => {
+                                Message::AuthCompleted(Ok((client, playlists)))
+                            }
+                            Err(e) => Message::AuthCompleted(Err(e)),
+                        },
+                    );
+                }
+            }
+            Message::NewPlaylistCreated(Err(e)) => {
+                self.status.error = Some(format!("create playlist: {e}"));
             }
             Message::SearchDone(Err(e)) => {
                 self.status.error = Some(format!("search: {e}"));

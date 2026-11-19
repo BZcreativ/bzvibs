@@ -170,15 +170,14 @@ fn sidebar(app: &RustyTube) -> Element<'static, Message> {
         nav_col = nav_col.push(pill);
     }
 
-    let new_playlist = button(text("+ New playlist").size(12))
-        .on_press(Message::Noop)
-        .padding([6, 12])
-        .width(Fill)
-        .style(move |_t, _s| button::Style {
-            border: pill_border(p.text_dim),
-            text_color: p.text_dim,
-            ..button::Style::default()
-        });
+    let new_playlist = text_button(
+        p,
+        "+ New playlist".into(),
+        ButtonKind::Secondary,
+        true,
+        Message::NewPlaylistModal(true),
+    )
+    .width(Fill);
 
     // Google account section per the concept brief: prominent sign-in pill
     // when signed out; account state, your playlists, and disconnect when
@@ -274,14 +273,28 @@ fn sidebar(app: &RustyTube) -> Element<'static, Message> {
 
     let mut playlists = column![text("Playlists").size(11).color(p.text_dim)].spacing(2);
     if !matches!(app.auth, AuthState::SignedIn { .. }) {
-        for name in [
-            "Liked music",
-            "Focus Flow",
-            "Late Night",
-            "Chill Vibes",
-            "Ambient",
-        ] {
-            playlists = playlists.push(text(format!("  {name}")).size(12).color(p.text_dim));
+        // Before sign-in these are real starter mixes: each runs its search
+        // and loads the queue, so the sidebar is never inert.
+        for (label, query) in crate::STARTER_MIXES {
+            let q = query.to_string();
+            let b = button(text(format!("  {label}")).size(12))
+                .on_press(Message::MoodSearch(q))
+                .width(Fill)
+                .padding([2, 6])
+                .style(move |_t, status| button::Style {
+                    background: Some(if status == button::Status::Hovered {
+                        Background::Color(palette_of(p).bg_card)
+                    } else {
+                        Background::Color(Color::TRANSPARENT)
+                    }),
+                    border: Border {
+                        radius: 6.0.into(),
+                        ..Border::default()
+                    },
+                    text_color: p.text_dim,
+                    ..button::Style::default()
+                });
+            playlists = playlists.push(b);
         }
     }
 
@@ -494,14 +507,186 @@ fn settings_stage(app: &RustyTube) -> Element<'static, Message> {
         .into()
 }
 
-fn stage(app: &RustyTube) -> Element<'static, Message> {
+// ---------- explore and library stages ----------
+
+fn tile(p: &'static Palette, label: String, msg: Message) -> button::Button<'static, Message> {
+    button(text(label).size(14))
+        .on_press(msg)
+        .width(Length::Fixed(170.0))
+        .height(Length::Fixed(80.0))
+        .style(move |_t, status| button::Style {
+            background: Some(if status == button::Status::Hovered {
+                Background::Color(p.bg_card_active)
+            } else {
+                Background::Color(p.bg_card)
+            }),
+            border: Border {
+                radius: 14.0.into(),
+                color: p.bg_card_active,
+                width: 1.0,
+            },
+            text_color: p.text,
+            ..button::Style::default()
+        })
+}
+
+fn explore_stage(app: &RustyTube) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
-    if app.section == Section::Equalizer {
-        return eq_stage(app);
+    let mut grid = column![].spacing(10);
+    for chunk in crate::MOODS.chunks(3) {
+        let mut r = row![].spacing(10);
+        for (label, query) in chunk {
+            r = r.push(tile(
+                p,
+                label.to_string(),
+                Message::MoodSearch(query.to_string()),
+            ));
+        }
+        grid = grid.push(r);
     }
-    if app.section == Section::Settings {
-        return settings_stage(app);
+    column![
+        text("Explore").size(24).color(p.text),
+        text("Pick a mood: each tile runs a real search and fills the queue.")
+            .size(11)
+            .color(p.text_dim),
+        grid,
+    ]
+    .spacing(14)
+    .padding(24)
+    .into()
+}
+
+fn library_stage(app: &RustyTube) -> Element<'static, Message> {
+    let p = theme::at(app.theme_index);
+    match &app.auth {
+        AuthState::SignedIn { playlists } => {
+            let mut list = column![].spacing(6);
+            if playlists.is_empty() {
+                list = list.push(text("loading playlists…").size(12).color(p.text_dim));
+            }
+            for pl in playlists {
+                list = list.push(
+                    button(
+                        row![
+                            text(pl.title.clone()).size(13).color(p.text),
+                            text(pl.track_count.clone()).size(10).color(p.text_dim),
+                        ]
+                        .spacing(10),
+                    )
+                    .on_press(Message::PlaylistClicked(pl.id.clone()))
+                    .width(Fill)
+                    .padding([8, 12])
+                    .style(move |_t, status| button::Style {
+                        background: Some(if status == button::Status::Hovered {
+                            Background::Color(palette_of(p).bg_card_active)
+                        } else {
+                            Background::Color(palette_of(p).bg_card)
+                        }),
+                        border: Border {
+                            radius: 10.0.into(),
+                            ..Border::default()
+                        },
+                        text_color: p.text,
+                        ..button::Style::default()
+                    }),
+                );
+            }
+            column![
+                text("Library").size(24).color(p.text),
+                text("Your saved playlists").size(11).color(p.text_dim),
+                scrollable(list).height(Fill),
+            ]
+            .spacing(14)
+            .padding(24)
+            .into()
+        }
+        _ => column![
+            text("Library").size(24).color(p.text),
+            text("Sign in to see your saved playlists and liked music.")
+                .size(12)
+                .color(p.text_dim),
+            text_button(
+                p,
+                "Sign in with Google".into(),
+                ButtonKind::Primary,
+                true,
+                Message::AuthStartPressed,
+            ),
+        ]
+        .spacing(14)
+        .padding(24)
+        .into(),
     }
+}
+
+fn new_playlist_dialog(app: &RustyTube) -> Element<'static, Message> {
+    let p = theme::at(app.theme_index);
+    let Some(name) = &app.new_playlist else {
+        return row![].into();
+    };
+    let name = name.clone();
+    let signed_in = app.authed.is_some();
+    let field = text_input("playlist name", &name)
+        .on_input(Message::NewPlaylistNameChanged)
+        .on_submit(Message::NewPlaylistSubmitted)
+        .size(13)
+        .padding([8, 12])
+        .style(move |_t, _s| text_input::Style {
+            background: Color::from_rgba(0.0, 0.0, 0.0, 0.4).into(),
+            border: pill_border(p.bg_card_active),
+            icon: p.text_dim,
+            placeholder: p.text_dim,
+            value: p.text,
+            selection: p.accent,
+        });
+    let card = column![
+        text("New playlist").size(18).color(p.text),
+        field,
+        if signed_in {
+            text("Created as Private on your account.")
+                .size(10)
+                .color(p.text_dim)
+        } else {
+            text("Sign in with Google to create playlists.")
+                .size(10)
+                .color(p.accent)
+        },
+        row![
+            text_button(
+                p,
+                "Create".into(),
+                ButtonKind::Primary,
+                signed_in,
+                Message::NewPlaylistSubmitted,
+            ),
+            text_button(
+                p,
+                "Cancel".into(),
+                ButtonKind::Ghost,
+                true,
+                Message::NewPlaylistModal(false),
+            ),
+        ]
+        .spacing(8),
+    ]
+    .spacing(12)
+    .padding(20);
+    container(card)
+        .width(Length::Fixed(360.0))
+        .style(move |_t| container::Style {
+            background: Some(Background::Color(p.bg_panel)),
+            border: Border {
+                radius: 16.0.into(),
+                color: p.accent,
+                width: 1.0,
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
+fn stage_inner(app: &RustyTube) -> Element<'static, Message> {
+    let p = theme::at(app.theme_index);
     let mut col = column![mode_pills(app), visualizer_card(app)]
         .spacing(14)
         .padding(16)
@@ -522,6 +707,21 @@ fn stage(app: &RustyTube) -> Element<'static, Message> {
         col = col.push(text(format!("error: {err}")).size(11).color(p.accent));
     }
     col.into()
+}
+
+/// Section dispatch plus the New playlist dialog overlay.
+fn stage(app: &RustyTube) -> Element<'static, Message> {
+    let base = match app.section {
+        Section::Equalizer => eq_stage(app),
+        Section::Settings => settings_stage(app),
+        Section::Explore => explore_stage(app),
+        Section::Library => library_stage(app),
+        Section::Home => stage_inner(app),
+    };
+    if app.new_playlist.is_some() {
+        return column![base, new_playlist_dialog(app)].spacing(8).into();
+    }
+    base
 }
 
 // ---------- equalizer stage ----------
@@ -670,27 +870,35 @@ fn eq_stage(app: &RustyTube) -> Element<'static, Message> {
 
 // ---------- right panel ----------
 
-fn chips_with(p: &'static Palette) -> Element<'static, Message> {
+fn chips_with(p: &'static Palette, selected: usize) -> Element<'static, Message> {
     let mut chips = row![].spacing(6);
-    for (i, label) in ["All", "Chill", "Focus", "Sleep", "Familiar"]
-        .iter()
-        .enumerate()
-    {
-        let active = i == 0;
+    for (i, label) in crate::CHIPS.iter().enumerate() {
+        let active = i == selected;
         let label = label.to_string();
-        let chip = container(text(label).size(11))
+        // Chips are live: selecting one re-runs the queue search for that
+        // mood (InnerTube has no anonymous continuation-token filter, so a
+        // mood search is the honest equivalent).
+        let chip = button(text(label).size(11))
+            .on_press(Message::ChipSelected(i))
             .padding([4, 12])
-            .style(move |_t| container::Style {
+            .style(move |_t, status| button::Style {
                 background: Some(if active {
-                    Background::Color(p.accent)
+                    Background::Color(palette_of(p).accent)
+                } else if status == button::Status::Hovered {
+                    Background::Color(palette_of(p).bg_card_active)
                 } else {
-                    Background::Color(p.bg_card)
+                    Background::Color(palette_of(p).bg_card)
                 }),
                 border: Border {
                     radius: 999.0.into(),
                     ..Border::default()
                 },
-                ..container::Style::default()
+                text_color: if active {
+                    Color::from_rgb(0.05, 0.03, 0.02)
+                } else {
+                    palette_of(p).text_dim
+                },
+                ..button::Style::default()
             });
         chips = chips.push(chip);
     }
@@ -770,7 +978,7 @@ fn right_panel(app: &RustyTube) -> Element<'static, Message> {
     let mut body = column![].spacing(8);
     match app.tab {
         RightTab::UpNext => {
-            body = body.push(chips_with(p));
+            body = body.push(chips_with(p, app.active_chip));
             if app.results.is_empty() {
                 body = body.push(text("Queue is empty").size(12).color(p.text_dim));
             } else {

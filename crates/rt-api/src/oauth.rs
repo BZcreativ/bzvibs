@@ -186,6 +186,21 @@ impl AuthedClient {
             })
             .collect())
     }
+
+    /// Create a private playlist on the signed-in account. Returns its id.
+    pub async fn create_playlist(&self, title: &str) -> Result<String, String> {
+        let query = ytmapi_rs::query::CreatePlaylistQuery::new(
+            title,
+            None,
+            ytmapi_rs::query::playlist::PrivacyStatus::Private,
+        );
+        let id = self
+            .inner
+            .create_playlist(query)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(id.get_raw().to_string())
+    }
 }
 
 // ---------- credential storage (Windows Credential Manager via keyring) ----------

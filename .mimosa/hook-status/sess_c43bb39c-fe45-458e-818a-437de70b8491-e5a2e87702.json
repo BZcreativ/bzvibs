@@ -1,14 +1,14 @@
 {
   "schemaVersion": "mimosa-hook-status/v1",
-  "recordedAt": "2026-11-19T13:41:27.335Z",
+  "recordedAt": "2026-11-19T15:34:33.822Z",
   "sessionId": "sess_c43bb39c-fe45-458e-818a-437de70b8491",
   "event": "PostToolUse",
   "toolName": "Edit",
-  "file": "crates/rt-api/src/oauth.rs",
+  "file": "crates/rt-ui/src/view.rs",
   "outcome": "clear",
   "coverage": "complete",
   "findingCount": 0,
-  "durationMs": 32,
+  "durationMs": 30,
   "hostState": "hook_complete",
   "reportHint": ".mimosa/reports/"
 }

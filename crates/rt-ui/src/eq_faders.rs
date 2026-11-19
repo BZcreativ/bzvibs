@@ -66,6 +66,15 @@ fn band_under(bounds: &Rectangle, x: f32) -> Option<usize> {
     Some(i.min(BANDS - 1))
 }
 
+/// The press hit-test used by `update`: an ABSOLUTE cursor position against
+/// the ABSOLUTE widget bounds. This function is the regression surface for
+/// the coordinate-space bug (relative coords once selected a band two slots
+/// to the left).
+fn press_target(bounds: &Rectangle, cursor_abs: Point) -> Option<(usize, f32)> {
+    let band = band_under(bounds, cursor_abs.x)?;
+    Some((band, gain_for_y(bounds, cursor_abs.y)))
+}
+
 /// Public because the canvas `Program` trait's associated `State` is a
 /// public interface; opaque to everyone else.
 pub struct DragState {
@@ -85,19 +94,23 @@ impl canvas::Program<Message> for EqFaders {
         let iced::event::Event::Mouse(mouse) = event else {
             return None;
         };
+        // `bounds` is in window coordinates and so is `cursor.position()`;
+        // the draw pass uses a local rect at the origin instead. Passing
+        // widget-relative coordinates here (position_in) double-applied the
+        // bounds offset: clicks selected a band two slots to the left and
+        // the handle did not track the cursor. Absolute coordinates keep
+        // the helper math consistent and let a drag continue outside the
+        // widget (gain_for_y clamps).
         match mouse {
             iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left) => {
-                let pos = cursor.position_in(bounds)?;
-                let band = band_under(&bounds, pos.x)?;
+                let pos = cursor.position()?;
+                let (band, gain) = press_target(&bounds, pos)?;
                 *state = Some(DragState { band });
-                Some(canvas::Action::publish(Message::EqGainChanged(
-                    band,
-                    gain_for_y(&bounds, pos.y),
-                )))
+                Some(canvas::Action::publish(Message::EqGainChanged(band, gain)))
             }
             iced::mouse::Event::CursorMoved { .. } => {
                 let drag = state.as_ref()?;
-                let pos = cursor.position_in(bounds)?;
+                let pos = cursor.position()?;
                 Some(canvas::Action::publish(Message::EqGainChanged(
                     drag.band,
                     gain_for_y(&bounds, pos.y),
@@ -254,5 +267,39 @@ mod tests {
         }
         assert_eq!(band_under(&b, -1.0), None);
         assert_eq!(band_under(&b, b.width + 1.0), None);
+    }
+
+    #[test]
+    fn clicking_a_band_on_a_placed_widget_selects_that_band() {
+        // Regression: update() once fed widget-relative coordinates into
+        // helpers that add the absolute bounds offset, so a click on band 4
+        // selected band 2 and the handle did not track the cursor. The
+        // widget sits far from the origin in the real app (sidebar +
+        // padding), so the test places it there too.
+        let b = Rectangle::new(Point::new(267.0, 120.0), iced::Size::new(1290.0, 260.0));
+        for i in 0..BANDS {
+            let absolute = Point::new(band_center_x(&b, i), y_for_gain(&b, 0.0));
+            let (band, gain) = press_target(&b, absolute).expect("hit");
+            assert_eq!(band, i, "click on band {i} selected band {band}");
+            assert!(gain.abs() < 0.05, "click at 0 dB mapped to {gain}");
+        }
+    }
+
+    #[test]
+    fn press_outside_the_widget_is_not_a_hit() {
+        let b = Rectangle::new(Point::new(267.0, 120.0), iced::Size::new(1290.0, 260.0));
+        assert!(press_target(&b, Point::new(10.0, 200.0)).is_none());
+        assert!(press_target(&b, Point::new(1600.0, 200.0)).is_none());
+    }
+
+    #[test]
+    fn vertical_math_is_offset_aware_on_a_placed_widget() {
+        // The same bug class vertically: a handle at gain g drawn on a
+        // placed widget must map back to g when the cursor sits on it.
+        let b = Rectangle::new(Point::new(48.0, 260.0), iced::Size::new(1290.0, 260.0));
+        for g in [-9.0f32, 0.0, 4.0] {
+            let absolute_y = y_for_gain(&b, g);
+            assert!((gain_for_y(&b, absolute_y) - g).abs() < 0.05, "{g}");
+        }
     }
 }
