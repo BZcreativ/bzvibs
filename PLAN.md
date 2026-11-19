@@ -169,3 +169,12 @@ Ordered per the operator's brief; PR-13 landed, the rest queued.
 - PR-17 settings page: account, appearance, typography, playback, audio/EQ, shortcuts, privacy — assembling existing toggles + persistence.
 - PR-8/9 auth + library: still blocked on the operator's Google Cloud OAuth client (unchanged).
 - Deferred candidates (operator's list): more themes (Midnight/AMOLED/Ocean/Sunset/Light), mini-player mode, synced-lyric highlight (upstream), video mode.
+
+## Iteration 2 defect pass (2026-11-19, after operator report)
+
+- Fader drag bug FIXED: canvas `update()` mixed widget-relative cursor coords with absolute bounds (click band k selected k-2, handle missed the cursor). Now uses absolute coords; `press_target` extracted as the regression surface with placed-widget tests.
+- DEF-02 Explore/Library: real stages — Explore = mood tile grid running live searches; Library = signed-in playlist list or sign-in prompt.
+- DEF-04 sidebar mixes: starter mixes are live mood searches until sign-in replaces them with account playlists.
+- DEF-06 chips: clickable, re-run the queue search per mood (InnerTube exposes no anonymous continuation-token filter — deviation documented).
+- DEF-03 New playlist: modal + `AuthedClient::create_playlist` (private); disabled with instruction when signed out.
+- DEF-05 Video: still deferred by design (needs a video decode/render pipeline); Song/Video pills remain non-functional for Video and the operator's spec lists it last.
