@@ -55,6 +55,14 @@ pub fn builtin_presets() -> Vec<Preset> {
             name: "Treble".into(),
             gains: [0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.5],
         },
+        Preset {
+            name: "Rock".into(),
+            gains: [4.5, 3.0, -1.5, -2.0, 1.5, 3.5, 4.0, 4.0],
+        },
+        Preset {
+            name: "Classical".into(),
+            gains: [3.5, 2.0, 0.0, 0.0, 0.0, -1.0, -2.0, -2.5],
+        },
     ]
 }
 
@@ -101,6 +109,31 @@ pub fn save_to(dir: &std::path::Path, preset: &Preset) -> Result<PathBuf, Preset
     })?;
     std::fs::write(&path, json)?;
     Ok(path)
+}
+
+/// Delete a user preset by name. Missing files are not an error.
+pub fn delete_from(dir: &std::path::Path, name: &str) -> Result<(), PresetError> {
+    let path = dir.join(format!("{}.json", file_stem(name)));
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Rename a user preset: save under the new name, remove the old file.
+pub fn rename_in(dir: &std::path::Path, old: &str, new: &str) -> Result<Preset, PresetError> {
+    let presets = list_from(dir);
+    let Some(mut preset) = presets.into_iter().find(|p| p.name == old) else {
+        return Err(PresetError::BadFile {
+            path: dir.to_path_buf(),
+            reason: format!("preset {old:?} not found"),
+        });
+    };
+    preset.name = new.to_string();
+    save_to(dir, &preset)?;
+    delete_from(dir, old)?;
+    Ok(preset)
 }
 
 pub fn list_from(dir: &std::path::Path) -> Vec<Preset> {
@@ -155,6 +188,61 @@ mod tests {
             save_to(dir, &p).expect("save");
             let listed = list_from(dir);
             assert_eq!(listed, vec![p]);
+        });
+    }
+
+    #[test]
+    fn delete_removes_only_the_named_preset() {
+        with_temp_dir(|dir| {
+            save_to(
+                dir,
+                &Preset {
+                    name: "A".into(),
+                    gains: [1.0; 8],
+                },
+            )
+            .unwrap();
+            save_to(
+                dir,
+                &Preset {
+                    name: "B".into(),
+                    gains: [2.0; 8],
+                },
+            )
+            .unwrap();
+            delete_from(dir, "A").unwrap();
+            // Missing is not an error (idempotent).
+            delete_from(dir, "A").unwrap();
+            let listed = list_from(dir);
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].name, "B");
+        });
+    }
+
+    #[test]
+    fn rename_moves_gains_under_new_name() {
+        with_temp_dir(|dir| {
+            save_to(
+                dir,
+                &Preset {
+                    name: "Old".into(),
+                    gains: [3.0; 8],
+                },
+            )
+            .unwrap();
+            let renamed = rename_in(dir, "Old", "New Name").unwrap();
+            assert_eq!(renamed.name, "New Name");
+            assert_eq!(renamed.gains, [3.0; 8]);
+            let listed = list_from(dir);
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].name, "New Name");
+        });
+    }
+
+    #[test]
+    fn rename_of_missing_preset_errors() {
+        with_temp_dir(|dir| {
+            assert!(rename_in(dir, "ghost", "x").is_err());
         });
     }
 

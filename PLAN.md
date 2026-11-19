@@ -157,3 +157,15 @@ Files each PR may touch: PR-1 `Cargo.toml`, `crates/*` skeletons, `.github/workf
 ## Scratch
 
 Prototypes live in `prototypes/pa-api` (search + stream probing) and `prototypes/pb-decode` (fetch + decode + DSP proof). Both are throwaway instruments per the prototype playbook; they are committed as evidence, not as production code.
+
+## Iteration 2 (started 2026-11-19)
+
+Ordered per the operator's brief; PR-13 landed, the rest queued.
+
+- PR-13 vertical equalizer: canvas fader widget with drag-to-gain, dB above, Hz below, 0 dB reference line; Rock/Classical builtins; Rename/Delete/Reset for user presets. LANDED.
+- PR-14 design system: shared primary/secondary/icon button styles, consistent padding, hover/pressed/disabled states, restrained gradients.
+- PR-15 typography + accessibility: bundled Inter font option, global text scale (S/M/L), contrast bump for secondary text, settings persisted via rt-config.
+- PR-16 keyboard shortcuts: Space/Arrows/Ctrl+K/Ctrl+E/M/L/? defaults with a shortcuts overlay; customization deferred until the settings page exists.
+- PR-17 settings page: account, appearance, typography, playback, audio/EQ, shortcuts, privacy — assembling existing toggles + persistence.
+- PR-8/9 auth + library: still blocked on the operator's Google Cloud OAuth client (unchanged).
+- Deferred candidates (operator's list): more themes (Midnight/AMOLED/Ocean/Sunset/Light), mini-player mode, synced-lyric highlight (upstream), video mode.

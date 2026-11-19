@@ -1,6 +1,7 @@
 //! The application shell: navigation, panels, playback bar, and the wiring
 //! to search and playback (PR-7).
 
+pub mod eq_faders;
 pub mod state;
 pub mod theme;
 pub mod view;
@@ -67,6 +68,9 @@ pub enum Message {
     EqBypassToggled,
     EqNameChanged(String),
     EqSavePressed,
+    EqResetPressed,
+    EqRenamePressed,
+    EqDeletePressed,
     EqUserPresetsLoaded(Vec<rt_config::Preset>),
     LyricsLoaded(String, std::result::Result<(String, String), String>),
     Noop,
@@ -368,6 +372,46 @@ impl RustyTube {
                         self.eq.user_presets = rt_config::list_user();
                     }
                     Err(e) => self.status.error = Some(format!("preset save: {e}")),
+                }
+            }
+            Message::EqResetPressed => {
+                self.eq.gains_db = [0.0; 8];
+                self.eq.preset_name = "Flat".into();
+                self.push_eq();
+            }
+            Message::EqRenamePressed => {
+                let new = if self.eq.save_name.trim().is_empty() {
+                    "Custom".to_string()
+                } else {
+                    self.eq.save_name.trim().to_string()
+                };
+                let old = self.eq.preset_name.clone();
+                let is_user_preset = self.eq.user_presets.iter().any(|p| p.name == old);
+                if is_user_preset {
+                    match rt_config::rename_in(&rt_config::presets_dir(), &old, &new) {
+                        Ok(p) => {
+                            self.eq.preset_name = p.name.clone();
+                            self.eq.user_presets = rt_config::list_user();
+                        }
+                        Err(e) => self.status.error = Some(format!("preset rename: {e}")),
+                    }
+                } else {
+                    self.status.error = Some("only your own presets can be renamed".to_string());
+                }
+            }
+            Message::EqDeletePressed => {
+                let old = self.eq.preset_name.clone();
+                let is_user_preset = self.eq.user_presets.iter().any(|p| p.name == old);
+                if is_user_preset {
+                    if let Err(e) = rt_config::delete_from(&rt_config::presets_dir(), &old) {
+                        self.status.error = Some(format!("preset delete: {e}"));
+                    }
+                    self.eq.user_presets = rt_config::list_user();
+                    if self.eq.preset_name == old {
+                        self.eq.preset_name = "Flat".into();
+                    }
+                } else {
+                    self.status.error = Some("only your own presets can be deleted".to_string());
                 }
             }
             Message::Noop => {}

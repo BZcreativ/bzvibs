@@ -328,7 +328,12 @@ fn eq_stage(app: &RustyTube) -> Element<'static, Message> {
     }
 
     let save_name = app.eq.save_name.clone();
-    let save_row = row![
+    let is_user_preset = app
+        .eq
+        .user_presets
+        .iter()
+        .any(|p| p.name == app.eq.preset_name);
+    let action_row = row![
         text_input("preset name", &save_name)
             .on_input(Message::EqNameChanged)
             .size(12)
@@ -341,8 +346,8 @@ fn eq_stage(app: &RustyTube) -> Element<'static, Message> {
                 value: p.text,
                 selection: p.accent,
             })
-            .width(Length::Fixed(180.0)),
-        button(text("Save").size(11))
+            .width(Length::Fixed(170.0)),
+        button(text("Save".to_string()).size(11))
             .on_press(Message::EqSavePressed)
             .padding([4, 12])
             .style(move |_t, _s| button::Style {
@@ -351,33 +356,61 @@ fn eq_stage(app: &RustyTube) -> Element<'static, Message> {
                 text_color: on_accent(p),
                 ..button::Style::default()
             }),
+        button(text("Rename".to_string()).size(11))
+            .on_press(Message::EqRenamePressed)
+            .padding([4, 12])
+            .style(move |_t, _s| button::Style {
+                background: Some(Background::Color(if is_user_preset {
+                    p.bg_card_active
+                } else {
+                    p.bg_card
+                })),
+                border: pill_border(Color::TRANSPARENT),
+                text_color: p.text,
+                ..button::Style::default()
+            }),
+        button(text("Delete".to_string()).size(11))
+            .on_press(Message::EqDeletePressed)
+            .padding([4, 12])
+            .style(move |_t, _s| button::Style {
+                background: Some(Background::Color(if is_user_preset {
+                    p.bg_card_active
+                } else {
+                    p.bg_card
+                })),
+                border: pill_border(Color::TRANSPARENT),
+                text_color: p.text,
+                ..button::Style::default()
+            }),
+        button(text("Reset".to_string()).size(11))
+            .on_press(Message::EqResetPressed)
+            .padding([4, 12])
+            .style(move |_t, _s| button::Style {
+                border: pill_border(p.bg_card_active),
+                text_color: p.text_dim,
+                ..button::Style::default()
+            }),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
 
-    let mut sliders = column![].spacing(8).padding([4, 0]);
-    for i in 0..8 {
-        let label = rt_config::band_label(i);
-        let value = app.eq.gains_db[i];
-        let row_i = row![
-            text(label)
-                .size(11)
-                .color(p.text_dim)
-                .width(Length::Fixed(64.0)),
-            accent_slider(p, -12.0..=12.0, value, move |v| {
-                Message::EqGainChanged(i, v)
-            }),
-            text(format!("{value:+.1} dB"))
-                .size(11)
-                .color(p.text)
-                .width(Length::Fixed(64.0)),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center);
-        sliders = sliders.push(row_i);
-    }
+    // Vertical faders: drag on the canvas maps y to gain directly.
+    let faders = crate::eq_faders::EqFaders::new(app.eq.gains_db, p, app.eq.enabled).view();
+    let fader_box = container(faders)
+        .width(Fill)
+        .height(Length::Fixed(260.0))
+        .padding([8, 16])
+        .style(move |_t| container::Style {
+            background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.25))),
+            border: Border {
+                radius: 16.0.into(),
+                color: p.bg_card_active,
+                width: 1.0,
+            },
+            ..container::Style::default()
+        });
 
-    column![header, presets, save_row, sliders]
+    column![header, presets, action_row, fader_box]
         .spacing(14)
         .padding(24)
         .width(Fill)
