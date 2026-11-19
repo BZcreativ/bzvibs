@@ -180,3 +180,8 @@ Ordered per the operator's brief; PR-13 landed, the rest queued.
 - DEF-05 Video: still deferred by design (needs a video decode/render pipeline); Song/Video pills remain non-functional for Video and the operator's spec lists it last.
 
 - PR-16 keyboard shortcuts: LANDED. Space/arrows (bare, suppressed while typing), Ctrl+K/E/L/M/1/2/3, '?' help overlay. Resolution is a pure tested function; Ctrl+K focuses the search field via widget id. Like (L) maps to the existing no-op thumbs-up until the like API is wired with auth.
+
+- Playback 403 bug: FIXED. googlevideo binds URLs resolved for non-browser clients (c=VISIONOS) to that client's User-Agent; the fetcher sent "Mozilla/5.0". Resolver now uses `yt-dlp -J`, replays the chosen format's http_headers, and the fetcher keeps only Range to itself. Verified on the reported video PY2j2S_mybo: 2,750,198 bytes, ftyp ok.
+- Fetch panic on 3xx: FIXED. `error_for_status()` treats redirects as Ok, so the `unreachable!()` arm fired; now returns FetchError::Status.
+- Sign-in feedback: errors now render as a global banner in every section (they were only shown inside the Home stage), print to stderr, and Google's OAuth JSON is humanized. With a deliberately invalid client the probe reports: "The OAuth client was not found. Check that RT_OAUTH_ID and RT_OAUTH_SECRET belong to an OAuth client of type 'TVs and Limited Input Devices'."
+- Video mode: the pill is now visibly disabled with an explanatory caption rather than a dead click. Implemented milestone remains open.

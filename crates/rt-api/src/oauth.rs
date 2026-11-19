@@ -72,6 +72,35 @@ impl std::fmt::Debug for SignInSession {
     }
 }
 
+/// Google answers OAuth errors as JSON inside the transport error text.
+/// Surface the human sentence ("The OAuth client was not found.") instead
+/// of the raw payload, and add the usual cause.
+fn humanize_oauth_error(raw: String) -> String {
+    let pick = |key: &str| -> Option<String> {
+        let start = raw.find(&format!("\"{key}\""))?;
+        let after = &raw[start + key.len() + 2..];
+        let colon = after.find(':')?;
+        let rest = after[colon + 1..].trim_start();
+        let rest = rest.strip_prefix('"')?;
+        let end = rest.find('"')?;
+        Some(rest[..end].to_string())
+    };
+    let desc = pick("error_description").or_else(|| pick("error"));
+    match desc {
+        Some(d) => {
+            let mut msg = d;
+            if raw.contains("invalid_client") {
+                msg.push_str(
+                    " Check that RT_OAUTH_ID and RT_OAUTH_SECRET belong to an OAuth client \
+                     of type 'TVs and Limited Input Devices'.",
+                );
+            }
+            msg
+        }
+        None => raw,
+    }
+}
+
 /// Step 1: ask Google for a device code.
 pub async fn begin_sign_in(
     client_id: String,
@@ -80,7 +109,7 @@ pub async fn begin_sign_in(
     let client = Client::new().map_err(|e| e.to_string())?;
     let generator = OAuthTokenGenerator::new(&client, client_id.clone())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| humanize_oauth_error(e.to_string()))?;
     Ok(SignInSession {
         user_code: generator.user_code.clone(),
         verification_url: generator.verification_url.clone(),
