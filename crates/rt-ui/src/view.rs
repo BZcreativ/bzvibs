@@ -1188,6 +1188,7 @@ fn panel<'a>(
 
 pub fn view(app: &RustyTube) -> Element<'static, Message> {
     let bg = theme::at(app.theme_index).bg_base;
+    let p = theme::at(app.theme_index);
     let body = row![
         panel(app, sidebar(app))
             .width(Length::Fixed(220.0))
@@ -1200,7 +1201,41 @@ pub fn view(app: &RustyTube) -> Element<'static, Message> {
     .width(Fill)
     .height(Fill);
 
-    let page = column![body, playback_bar(app)].width(Fill).height(Fill);
+    // Global error banner: errors used to render only inside the Home
+    // stage, so a failed sign-in on the Library page looked like nothing
+    // happened at all.
+    let banner: Element<'static, Message> = match &app.status.error {
+        Some(err) => container(
+            row![
+                text(format!("⚠ {err}")).size(11).color(p.bg_base),
+                button(text("dismiss".to_string()).size(10))
+                    .on_press(Message::ErrorDismissed)
+                    .padding([2, 8])
+                    .style(move |_t, _s| button::Style {
+                        background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.25,))),
+                        border: Border {
+                            radius: 999.0.into(),
+                            ..Border::default()
+                        },
+                        text_color: p.bg_base,
+                        ..button::Style::default()
+                    }),
+            ]
+            .spacing(12)
+            .padding([6, 14]),
+        )
+        .width(Fill)
+        .style(move |_t| container::Style {
+            background: Some(Background::Color(p.accent)),
+            ..container::Style::default()
+        })
+        .into(),
+        None => row![].height(0).into(),
+    };
+
+    let page = column![banner, body, playback_bar(app)]
+        .width(Fill)
+        .height(Fill);
 
     container(page)
         .width(Fill)

@@ -70,6 +70,7 @@ pub enum Message {
     NewPlaylistCreated(std::result::Result<String, String>),
     KeyPressed(iced::keyboard::Key, iced::keyboard::Modifiers),
     HelpToggled,
+    ErrorDismissed,
     Tick,
     PlayPressed,
     NextPressed,
@@ -173,6 +174,8 @@ pub struct RustyTube {
     /// Volume before mute, restored on unmute.
     mute_level: f32,
     auth_session: Option<Arc<rt_api::SignInSession>>,
+    /// True between clicking Sign in and Google answering with a code.
+    pub auth_loading: bool,
     pub authed: Option<Arc<rt_api::AuthedClient>>,
     pub player: Option<PlayerHandle>,
     pub api: Option<Arc<ApiClient>>,
@@ -206,6 +209,7 @@ impl Default for RustyTube {
             spectrum: vec![0.0; rt_audio::BAND_COUNT],
             spectrum_analyzer: rt_audio::SpectrumAnalyzer::new(),
             auth: AuthState::SignedOut,
+            auth_loading: false,
             active_chip: 0,
             new_playlist: None,
             typing: false,
@@ -348,6 +352,8 @@ impl RustyTube {
                 if !matches!(self.auth, AuthState::SignedOut) {
                     return Task::none();
                 }
+                self.auth_loading = true;
+                self.status.error = None;
                 return Task::perform(
                     async {
                         let (id, secret) = rt_api::credentials_from_env()?;
@@ -357,6 +363,7 @@ impl RustyTube {
                 );
             }
             Message::AuthSessionArrived(Ok(session)) => {
+                self.auth_loading = false;
                 self.auth = AuthState::AwaitingUser {
                     user_code: session.user_code.clone(),
                     verification_url: session.verification_url.clone(),
@@ -365,7 +372,9 @@ impl RustyTube {
                 return Task::perform(
                     async move {
                         let token = session.wait_for_authorization().await?;
-                        rt_api::store_token(&token).map_err(|e| e.to_string())?;
+                        if let Err(e) = rt_api::store_token(&token) {
+                            eprintln!("[auth] token store failed: {e}");
+                        }
                         let client = rt_api::AuthedClient::new(token).map_err(|e| e.to_string())?;
                         let client = Arc::new(client);
                         let playlists = client.playlists().await.map_err(|e| e.to_string())?;
@@ -375,14 +384,22 @@ impl RustyTube {
                 );
             }
             Message::AuthSessionArrived(Err(e)) => {
+                // Visible in every section via the global banner, and on the
+                // console for capture.
+                eprintln!("[auth] sign-in start failed: {e}");
+                self.auth_loading = false;
                 self.status.error = Some(e);
             }
             Message::AuthCompleted(Ok((client, playlists))) => {
+                self.auth_loading = false;
                 self.authed = Some(client);
                 self.auth = AuthState::SignedIn { playlists };
                 self.auth_session = None;
+                self.status.error = None;
             }
             Message::AuthCompleted(Err(e)) => {
+                eprintln!("[auth] sign-in failed: {e}");
+                self.auth_loading = false;
                 self.auth = AuthState::SignedOut;
                 self.auth_session = None;
                 self.status.error = Some(format!("sign-in: {e}"));
@@ -527,6 +544,7 @@ impl RustyTube {
                 }
             }
             Message::HelpToggled => self.help_open = !self.help_open,
+            Message::ErrorDismissed => self.status.error = None,
             Message::SearchDone(Err(e)) => {
                 self.status.error = Some(format!("search: {e}"));
             }

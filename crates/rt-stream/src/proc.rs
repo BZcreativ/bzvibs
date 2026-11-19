@@ -5,7 +5,11 @@
 //! name. The binary is resolved by the OS from PATH (or the working
 //! directory on Windows).
 
-const FIXED_ARGV: [&str; 6] = ["-f", "140", "--no-warnings", "-g", "--batch-file", "-"];
+// `-J` (dump-json) instead of `-g`: the JSON carries the format's
+// http_headers, which googlevideo URLs bound to a non-browser client (for
+// example c=VISIONOS) require on replay. A bare URL with the wrong UA
+// answers 403.
+const FIXED_ARGV: [&str; 6] = ["-f", "140", "--no-warnings", "-J", "--batch-file", "-"];
 
 /// Run the resolver and return its captured output. `url_line` goes to the
 /// child's stdin only.
