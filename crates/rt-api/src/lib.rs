@@ -3,9 +3,14 @@
 
 pub mod guard;
 pub mod model;
+pub mod oauth;
 
 pub use guard::{GuardError, guard};
 pub use model::Track;
+pub use oauth::{
+    AuthedClient, PlaylistBrief, SignInSession, begin_sign_in, clear_token, credentials_from_env,
+    load_token, store_token,
+};
 pub use ytmapi_rs::common::{LyricsID, PlaylistID, VideoID, YoutubeID};
 pub use ytmapi_rs::parse::{Lyrics, PlaylistItem, WatchPlaylistTrack};
 

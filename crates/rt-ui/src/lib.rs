@@ -51,6 +51,13 @@ pub enum Message {
     SearchSubmitted,
     SearchDone(std::result::Result<Vec<Track>, String>),
     TrackClicked(usize),
+    PlaylistClicked(String),
+    AuthStartPressed,
+    AuthSessionArrived(std::result::Result<Arc<rt_api::SignInSession>, String>),
+    AuthCompleted(
+        std::result::Result<(Arc<rt_api::AuthedClient>, Vec<rt_api::PlaylistBrief>), String>,
+    ),
+    AuthDisconnectPressed,
     Tick,
     PlayPressed,
     NextPressed,
@@ -108,6 +115,20 @@ pub struct LyricsState {
     pub source: String,
 }
 
+/// Google account sign-in state for the sidebar.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AuthState {
+    SignedOut,
+    /// Google answered with a code; the user must visit the URL.
+    AwaitingUser {
+        user_code: String,
+        verification_url: String,
+    },
+    SignedIn {
+        playlists: Vec<rt_api::PlaylistBrief>,
+    },
+}
+
 pub struct RustyTube {
     pub section: Section,
     pub tab: RightTab,
@@ -124,6 +145,9 @@ pub struct RustyTube {
     /// Smoothed visualizer bands (peak-hold decay), driven by the tap.
     pub spectrum: Vec<f32>,
     spectrum_analyzer: rt_audio::SpectrumAnalyzer,
+    pub auth: AuthState,
+    auth_session: Option<Arc<rt_api::SignInSession>>,
+    pub authed: Option<Arc<rt_api::AuthedClient>>,
     pub player: Option<PlayerHandle>,
     pub api: Option<Arc<ApiClient>>,
 }
@@ -154,6 +178,9 @@ impl Default for RustyTube {
             lyrics_loading_for: None,
             spectrum: vec![0.0; rt_audio::BAND_COUNT],
             spectrum_analyzer: rt_audio::SpectrumAnalyzer::new(),
+            auth: AuthState::SignedOut,
+            auth_session: None,
+            authed: None,
             player: PlayerHandle::spawn().ok(),
             api: ApiClient::new().ok().map(Arc::new),
         }
@@ -171,7 +198,8 @@ impl RustyTube {
     }
 
     /// Boot with content already loading: the default query fills the stage
-    /// and the queue without a keystroke.
+    /// and the queue without a keystroke, and a stored Google token (if any)
+    /// restores the signed-in session.
     pub fn boot() -> (RustyTube, Task<Message>) {
         let mut app = RustyTube::new();
         app.search_query = DEFAULT_QUERY.to_string();
@@ -180,7 +208,43 @@ impl RustyTube {
             async { rt_config::list_user() },
             Message::EqUserPresetsLoaded,
         );
-        (app, Task::batch([search, presets]))
+        // Restore a previous session from the OS credential store.
+        let auth = match rt_api::load_token() {
+            Ok(Some(token)) => match rt_api::AuthedClient::new(token) {
+                Ok(client) => {
+                    let client = Arc::new(client);
+                    app.authed = Some(client.clone());
+                    app.auth = AuthState::SignedIn {
+                        playlists: Vec::new(),
+                    };
+                    Task::perform(
+                        async move {
+                            client
+                                .playlists()
+                                .await
+                                .map(|b| (client, b))
+                                .map_err(|e| e.to_string())
+                        },
+                        |r| match r {
+                            Ok((client, playlists)) => {
+                                Message::AuthCompleted(Ok((client, playlists)))
+                            }
+                            Err(e) => Message::AuthCompleted(Err(e)),
+                        },
+                    )
+                }
+                Err(e) => {
+                    app.status.error = Some(format!("stored sign-in: {e}"));
+                    Task::none()
+                }
+            },
+            Ok(None) => Task::none(),
+            Err(e) => {
+                app.status.error = Some(format!("credential store: {e}"));
+                Task::none()
+            }
+        };
+        (app, Task::batch([search, presets, auth]))
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -206,6 +270,66 @@ impl RustyTube {
                 // the user is (and the boot search must not stomp an
                 // RT_SECTION override).
                 self.results = tracks;
+            }
+            Message::PlaylistClicked(id) => {
+                let Some(client) = self.authed.clone() else {
+                    return Task::none();
+                };
+                return Task::perform(
+                    async move { client.playlist_tracks(&id).await },
+                    Message::SearchDone,
+                );
+            }
+            Message::AuthStartPressed => {
+                if !matches!(self.auth, AuthState::SignedOut) {
+                    return Task::none();
+                }
+                return Task::perform(
+                    async {
+                        let (id, secret) = rt_api::credentials_from_env()?;
+                        rt_api::begin_sign_in(id, secret).await.map(Arc::new)
+                    },
+                    Message::AuthSessionArrived,
+                );
+            }
+            Message::AuthSessionArrived(Ok(session)) => {
+                self.auth = AuthState::AwaitingUser {
+                    user_code: session.user_code.clone(),
+                    verification_url: session.verification_url.clone(),
+                };
+                self.auth_session = Some(session.clone());
+                return Task::perform(
+                    async move {
+                        let token = session.wait_for_authorization().await?;
+                        rt_api::store_token(&token).map_err(|e| e.to_string())?;
+                        let client = rt_api::AuthedClient::new(token).map_err(|e| e.to_string())?;
+                        let client = Arc::new(client);
+                        let playlists = client.playlists().await.map_err(|e| e.to_string())?;
+                        Ok((client, playlists))
+                    },
+                    Message::AuthCompleted,
+                );
+            }
+            Message::AuthSessionArrived(Err(e)) => {
+                self.status.error = Some(e);
+            }
+            Message::AuthCompleted(Ok((client, playlists))) => {
+                self.authed = Some(client);
+                self.auth = AuthState::SignedIn { playlists };
+                self.auth_session = None;
+            }
+            Message::AuthCompleted(Err(e)) => {
+                self.auth = AuthState::SignedOut;
+                self.auth_session = None;
+                self.status.error = Some(format!("sign-in: {e}"));
+            }
+            Message::AuthDisconnectPressed => {
+                if let Err(e) = rt_api::clear_token() {
+                    self.status.error = Some(format!("disconnect: {e}"));
+                }
+                self.auth = AuthState::SignedOut;
+                self.authed = None;
+                self.auth_session = None;
             }
             Message::SearchDone(Err(e)) => {
                 self.status.error = Some(format!("search: {e}"));

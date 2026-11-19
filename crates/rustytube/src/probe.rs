@@ -3,6 +3,7 @@
 
 use rt_api::{ApiClient, Track};
 use rt_stream::{StreamResolver, VideoId, YtDlpResolver};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub fn run(args: &[String]) {
@@ -14,6 +15,7 @@ pub fn run(args: &[String]) {
         (Some("stream"), Some(video_id)) => stream(video_id),
         (Some("play"), Some(video_id)) => play(video_id),
         (Some("lyrics"), Some(video_id)) => lyrics(video_id),
+        (Some("auth"), _) => auth(),
         (Some("fetchmt"), Some(video_id)) => fetch_mt(video_id),
         _ => {
             eprintln!(
@@ -305,6 +307,66 @@ fn lyrics(video_id: &str) {
             }
             Err(e) => {
                 println!("no lyrics: {e}");
+                std::process::exit(1);
+            }
+        }
+    });
+}
+
+/// Live OAuth device flow. Reads RT_OAUTH_ID / RT_OAUTH_SECRET, prints the
+/// verification URL + code, waits for authorization, stores the token in
+/// the OS credential store, then lists the account's playlists.
+fn auth() {
+    let (client_id, client_secret) = match rt_api::credentials_from_env() {
+        Ok(pair) => pair,
+        Err(e) => {
+            println!("cannot start sign-in: {e}");
+            std::process::exit(2);
+        }
+    };
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    rt.block_on(async {
+        let session = match rt_api::begin_sign_in(client_id, client_secret).await {
+            Ok(s) => s,
+            Err(e) => {
+                println!("device code request failed: {e}");
+                std::process::exit(1);
+            }
+        };
+        println!("1. open: {}", session.verification_url);
+        println!("2. enter code: {}", session.user_code);
+        println!("waiting for you to finish (this can take a couple of minutes)…");
+        let token = match session.wait_for_authorization().await {
+            Ok(t) => t,
+            Err(e) => {
+                println!("authorization failed: {e}");
+                std::process::exit(1);
+            }
+        };
+        if let Err(e) = rt_api::store_token(&token) {
+            println!("token store failed: {e}");
+            std::process::exit(1);
+        }
+        let client = match rt_api::AuthedClient::new(token) {
+            Ok(c) => Arc::new(c),
+            Err(e) => {
+                println!("authenticated client failed: {e}");
+                std::process::exit(1);
+            }
+        };
+        match client.playlists().await {
+            Ok(briefs) => {
+                println!("signed in. playlists: {}", briefs.len());
+                for b in briefs.iter().take(10) {
+                    println!("  {} ({})", b.title, b.track_count);
+                }
+                println!("PASS");
+            }
+            Err(e) => {
+                println!("playlist fetch failed: {e}");
                 std::process::exit(1);
             }
         }

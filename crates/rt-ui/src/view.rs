@@ -8,7 +8,7 @@
 //! booleans), never the app borrow, so widgets stay 'static.
 
 use crate::theme::{self, Palette};
-use crate::{Message, RightTab, RustyTube, Section};
+use crate::{AuthState, Message, RightTab, RustyTube, Section};
 
 use iced::widget::slider::{Handle, HandleShape, Rail};
 use iced::widget::{button, column, container, row, scrollable, slider, text, text_input};
@@ -100,22 +100,126 @@ fn sidebar(app: &RustyTube) -> Element<'static, Message> {
             ..button::Style::default()
         });
 
-    let mut playlists = column![text("Playlists").size(11).color(p.text_dim)].spacing(2);
-    for name in [
-        "Liked music",
-        "Focus Flow",
-        "Late Night",
-        "Chill Vibes",
-        "Ambient",
-    ] {
-        playlists = playlists.push(text(format!("  {name}")).size(12).color(p.text_dim));
+    // Google account section per the concept brief: prominent sign-in pill
+    // when signed out; account state, your playlists, and disconnect when
+    // signed in.
+    let mut auth_col = column![].spacing(4).padding([4, 0]);
+    match &app.auth {
+        AuthState::SignedOut => {
+            let sign_in = button(text("Sign in with Google").size(13))
+                .on_press(Message::AuthStartPressed)
+                .padding([8, 12])
+                .width(Fill)
+                .style(move |_t, _s| button::Style {
+                    background: Some(accent_gradient(p)),
+                    border: Border {
+                        radius: 12.0.into(),
+                        ..Border::default()
+                    },
+                    text_color: on_accent(p),
+                    ..button::Style::default()
+                });
+            auth_col = auth_col.push(sign_in);
+        }
+        AuthState::AwaitingUser {
+            user_code,
+            verification_url,
+        } => {
+            auth_col = auth_col.push(
+                column![
+                    text("Open in your browser:").size(10).color(p.text_dim),
+                    text(verification_url.clone()).size(10).color(p.text),
+                    text("and enter this code:").size(10).color(p.text_dim),
+                    text(user_code.clone()).size(16).color(p.accent),
+                    text("waiting for you to finish…")
+                        .size(10)
+                        .color(p.text_dim),
+                ]
+                .spacing(2),
+            );
+        }
+        AuthState::SignedIn { playlists } => {
+            auth_col = auth_col.push(text("● Signed in").size(11).color(p.accent));
+            if playlists.is_empty() {
+                auth_col = auth_col.push(text("  loading playlists…").size(11).color(p.text_dim));
+            }
+            let mut n_shown = 0usize;
+            for pl in playlists.iter().take(8) {
+                let id = pl.id.clone();
+                let title = pl.title.clone();
+                let pl_btn = button(
+                    column![
+                        text(title).size(11).color(p.text),
+                        text(pl.track_count.clone()).size(9).color(p.text_dim),
+                    ]
+                    .spacing(0),
+                )
+                .on_press(Message::PlaylistClicked(id))
+                .width(Fill)
+                .padding([3, 8])
+                .style(move |_t, status| button::Style {
+                    background: Some(if status == button::Status::Hovered {
+                        Background::Color(palette_of(p).bg_card)
+                    } else {
+                        Background::Color(Color::TRANSPARENT)
+                    }),
+                    border: Border {
+                        radius: 8.0.into(),
+                        ..Border::default()
+                    },
+                    text_color: p.text,
+                    ..button::Style::default()
+                });
+                auth_col = auth_col.push(pl_btn);
+                n_shown += 1;
+            }
+            if playlists.len() > n_shown {
+                auth_col = auth_col.push(
+                    text(format!("  …and {} more", playlists.len() - n_shown))
+                        .size(10)
+                        .color(p.text_dim),
+                );
+            }
+            let disconnect = button(text("Disconnect".to_string()).size(11))
+                .on_press(Message::AuthDisconnectPressed)
+                .padding([4, 10])
+                .style(move |_t, _s| button::Style {
+                    border: pill_border(p.text_dim),
+                    text_color: p.text_dim,
+                    ..button::Style::default()
+                });
+            auth_col = auth_col.push(disconnect);
+        }
     }
 
-    column![brand, nav_col, new_playlist, playlists]
+    let mut playlists = column![text("Playlists").size(11).color(p.text_dim)].spacing(2);
+    if !matches!(app.auth, AuthState::SignedIn { .. }) {
+        for name in [
+            "Liked music",
+            "Focus Flow",
+            "Late Night",
+            "Chill Vibes",
+            "Ambient",
+        ] {
+            playlists = playlists.push(text(format!("  {name}")).size(12).color(p.text_dim));
+        }
+    }
+
+    column![brand, nav_col, auth_col, new_playlist, playlists]
         .spacing(10)
         .padding(16)
         .width(Fill)
         .into()
+}
+
+/// Resolve a palette back to its &'static slot for move closures.
+fn palette_of(p: &Palette) -> &'static Palette {
+    theme::at(
+        theme::THEMES
+            .iter()
+            .position(|x| x.name == p.name)
+            .unwrap_or(0),
+    )
 }
 
 // ---------- top bar ----------
