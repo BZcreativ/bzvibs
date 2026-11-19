@@ -9,7 +9,8 @@ pub use guard::{GuardError, guard};
 pub use model::Track;
 pub use oauth::{
     AuthedClient, PlaylistBrief, SignInSession, begin_sign_in, clear_token, credentials_from_env,
-    load_token, store_token,
+    load_token, needs_client_setup, store_client_credentials, store_token,
+    stored_client_credentials,
 };
 pub use ytmapi_rs::common::{LyricsID, PlaylistID, VideoID, YoutubeID};
 pub use ytmapi_rs::parse::{Lyrics, PlaylistItem, WatchPlaylistTrack};

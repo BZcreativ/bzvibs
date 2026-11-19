@@ -31,8 +31,10 @@ impl From<LibraryPlaylist> for PlaylistBrief {
     }
 }
 
-/// Read the operator's OAuth client credentials from the environment.
-/// Missing credentials are an Err with setup instructions, not a panic.
+/// Read the operator's OAuth client credentials: environment first, then
+/// the OS credential store (so a user can paste them in the app's setup
+/// card and never touch a shell). Missing credentials are an Err with setup
+/// instructions, not a panic.
 pub fn credentials_from_env() -> Result<(String, String), String> {
     match (
         std::env::var("RT_OAUTH_ID"),
@@ -41,14 +43,19 @@ pub fn credentials_from_env() -> Result<(String, String), String> {
         (Ok(id), Ok(secret)) if !id.trim().is_empty() && !secret.trim().is_empty() => {
             Ok((id.trim().to_string(), secret.trim().to_string()))
         }
-        _ => Err(
+        _ => stored_client_credentials().ok_or_else(|| {
             "Google sign-in needs an OAuth client. Create one at console.cloud.google.com \
              (APIs & Services > Credentials > OAuth client ID > 'TVs and Limited Input \
-             Devices'), then set the environment variables RT_OAUTH_ID and RT_OAUTH_SECRET \
-             before launching the app."
-                .to_string(),
-        ),
+             Devices'), then paste its id and secret in this card."
+                .to_string()
+        }),
     }
+}
+
+/// True when no client credentials exist anywhere, so the UI can show the
+/// setup card instead of a bare error.
+pub fn needs_client_setup() -> bool {
+    credentials_from_env().is_err()
 }
 
 /// One sign-in session: what the UI shows plus what polling needs.
@@ -236,6 +243,36 @@ impl AuthedClient {
 
 const KEYRING_SERVICE: &str = "bzvibs";
 const KEYRING_USER: &str = "youtube-oauth-token";
+const KEYRING_CLIENT_ID: &str = "oauth-client-id";
+const KEYRING_CLIENT_SECRET: &str = "oauth-client-secret";
+
+/// Persist the OAuth client id and secret in the OS credential store. The
+/// app then signs in without any environment variables.
+pub fn store_client_credentials(id: &str, secret: &str) -> Result<(), StoreError> {
+    keyring::Entry::new(KEYRING_SERVICE, KEYRING_CLIENT_ID)?.set_password(id.trim())?;
+    keyring::Entry::new(KEYRING_SERVICE, KEYRING_CLIENT_SECRET)?.set_password(secret.trim())?;
+    Ok(())
+}
+
+pub fn stored_client_credentials() -> Option<(String, String)> {
+    let id = keyring::Entry::new(KEYRING_SERVICE, KEYRING_CLIENT_ID)
+        .ok()?
+        .get_password()
+        .ok()?;
+    let secret = keyring::Entry::new(KEYRING_SERVICE, KEYRING_CLIENT_SECRET)
+        .ok()?
+        .get_password()
+        .ok()?;
+    (!id.trim().is_empty() && !secret.trim().is_empty()).then_some((id, secret))
+}
+
+pub fn clear_client_credentials() {
+    for user in [KEYRING_CLIENT_ID, KEYRING_CLIENT_SECRET] {
+        if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, user) {
+            let _ = entry.delete_credential();
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {

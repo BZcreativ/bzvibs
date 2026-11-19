@@ -610,23 +610,120 @@ fn library_stage(app: &RustyTube) -> Element<'static, Message> {
             .padding(24)
             .into()
         }
-        _ => column![
-            text("Library").size(24).color(p.text),
-            text("Sign in to see your saved playlists and liked music.")
+        _ => {
+            let mut col = column![
+                text("Library").size(24).color(p.text),
+                text("Sign in to see your saved playlists and liked music.")
+                    .size(12)
+                    .color(p.text_dim),
+                text_button(
+                    p,
+                    if app.auth_loading {
+                        "Starting sign-in…".to_string()
+                    } else {
+                        "Sign in with Google".to_string()
+                    },
+                    ButtonKind::Primary,
+                    !app.auth_loading,
+                    Message::AuthStartPressed,
+                ),
+            ]
+            .spacing(14)
+            .padding(24);
+            if app.auth_setup.is_some() {
+                col = col.push(oauth_setup_card(app));
+            }
+            col.into()
+        }
+    }
+}
+
+/// In-app OAuth client setup: the credentials a user must create in Google
+/// Cloud, pasted once and stored in the OS keychain. Removes the need for
+/// environment variables when the app is launched by double-click.
+fn oauth_setup_card(app: &RustyTube) -> Element<'static, Message> {
+    let p = theme::at(app.theme_index);
+    let (id, secret) = app.auth_setup.clone().unwrap_or_default();
+
+    let field = |label: &'static str,
+                 value: String,
+                 placeholder: &'static str,
+                 on_input: fn(String) -> Message| {
+        column![
+            text(label).size(10).color(p.text_dim),
+            text_input(placeholder, &value)
+                .on_input(on_input)
                 .size(12)
-                .color(p.text_dim),
+                .padding([6, 10])
+                .style(move |_t, _s| text_input::Style {
+                    background: Color::from_rgba(0.0, 0.0, 0.0, 0.4).into(),
+                    border: pill_border(p.bg_card_active),
+                    icon: p.text_dim,
+                    placeholder: p.text_dim,
+                    value: p.text,
+                    selection: p.accent,
+                }),
+        ]
+        .spacing(3)
+    };
+
+    let card = column![
+        text("Connect a Google OAuth client").size(16).color(p.text),
+        text("1. console.cloud.google.com → create a project")
+            .size(10)
+            .color(p.text_dim),
+        text("2. OAuth consent screen → External → add your Gmail as a test user")
+            .size(10)
+            .color(p.text_dim),
+        text("3. Credentials → Create credentials → OAuth client ID")
+            .size(10)
+            .color(p.text_dim),
+        text("4. Application type: TVs and Limited Input Devices")
+            .size(10)
+            .color(p.accent),
+        text("Paste the id and secret below. They are stored in the Windows credential store, not in source.")
+            .size(10)
+            .color(p.text_dim),
+        field(
+            "Client ID",
+            id,
+            "xxxxxxxx.apps.googleusercontent.com",
+            Message::OauthIdChanged,
+        ),
+        field("Client secret", secret, "GOCSPX-…", Message::OauthSecretChanged),
+        row![
             text_button(
                 p,
-                "Sign in with Google".into(),
+                "Save and sign in".into(),
                 ButtonKind::Primary,
+                !app.auth_loading,
+                Message::OauthSetupSave,
+            ),
+            text_button(
+                p,
+                "Cancel".into(),
+                ButtonKind::Ghost,
                 true,
-                Message::AuthStartPressed,
+                Message::OauthSetupCancel,
             ),
         ]
-        .spacing(14)
-        .padding(24)
-        .into(),
-    }
+        .spacing(8),
+    ]
+    .spacing(10)
+    .padding(18);
+
+    container(card)
+        .width(Length::Fixed(430.0))
+        .style(move |_t| container::Style {
+            background: Some(Background::Color(p.bg_card)),
+            border: Border {
+                radius: 14.0.into(),
+                color: p.accent,
+                width: 1.0,
+            },
+            ..container::Style::default()
+        })
+        .into()
 }
 
 fn new_playlist_dialog(app: &RustyTube) -> Element<'static, Message> {

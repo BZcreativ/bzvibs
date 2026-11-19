@@ -71,6 +71,10 @@ pub enum Message {
     KeyPressed(iced::keyboard::Key, iced::keyboard::Modifiers),
     HelpToggled,
     ErrorDismissed,
+    OauthIdChanged(String),
+    OauthSecretChanged(String),
+    OauthSetupCancel,
+    OauthSetupSave,
     Tick,
     PlayPressed,
     NextPressed,
@@ -176,6 +180,8 @@ pub struct RustyTube {
     auth_session: Option<Arc<rt_api::SignInSession>>,
     /// True between clicking Sign in and Google answering with a code.
     pub auth_loading: bool,
+    /// OAuth client setup card: `Some((id, secret))` while it is open.
+    pub auth_setup: Option<(String, String)>,
     pub authed: Option<Arc<rt_api::AuthedClient>>,
     pub player: Option<PlayerHandle>,
     pub api: Option<Arc<ApiClient>>,
@@ -210,6 +216,7 @@ impl Default for RustyTube {
             spectrum_analyzer: rt_audio::SpectrumAnalyzer::new(),
             auth: AuthState::SignedOut,
             auth_loading: false,
+            auth_setup: None,
             active_chip: 0,
             new_playlist: None,
             typing: false,
@@ -352,6 +359,14 @@ impl RustyTube {
                 if !matches!(self.auth, AuthState::SignedOut) {
                     return Task::none();
                 }
+                // No client credentials anywhere: open the in-app setup card
+                // instead of failing with an instruction the user cannot act
+                // on. Credentials saved there go to the OS keychain.
+                if rt_api::needs_client_setup() {
+                    self.auth_setup = Some((String::new(), String::new()));
+                    self.status.error = None;
+                    return Task::none();
+                }
                 self.auth_loading = true;
                 self.status.error = None;
                 return Task::perform(
@@ -361,6 +376,43 @@ impl RustyTube {
                     },
                     Message::AuthSessionArrived,
                 );
+            }
+            Message::OauthIdChanged(v) => {
+                if let Some((id, _)) = &mut self.auth_setup {
+                    *id = v;
+                }
+            }
+            Message::OauthSecretChanged(v) => {
+                if let Some((_, secret)) = &mut self.auth_setup {
+                    *secret = v;
+                }
+            }
+            Message::OauthSetupCancel => self.auth_setup = None,
+            Message::OauthSetupSave => {
+                let Some((id, secret)) = self.auth_setup.clone() else {
+                    return Task::none();
+                };
+                if id.trim().is_empty() || secret.trim().is_empty() {
+                    self.status.error =
+                        Some("client id and client secret are both required".to_string());
+                    return Task::none();
+                }
+                match rt_api::store_client_credentials(&id, &secret) {
+                    Ok(()) => {
+                        let id = id.trim().to_string();
+                        let secret = secret.trim().to_string();
+                        self.auth_setup = None;
+                        self.auth_loading = true;
+                        self.status.error = None;
+                        return Task::perform(
+                            async move { rt_api::begin_sign_in(id, secret).await.map(Arc::new) },
+                            Message::AuthSessionArrived,
+                        );
+                    }
+                    Err(e) => {
+                        self.status.error = Some(format!("credential store: {e}"));
+                    }
+                }
             }
             Message::AuthSessionArrived(Ok(session)) => {
                 self.auth_loading = false;
