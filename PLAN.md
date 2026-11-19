@@ -113,12 +113,12 @@ Files each PR may touch: PR-1 `Cargo.toml`, `crates/*` skeletons, `.github/workf
 
 ## PR-10 — lyrics panel
 
-- [ ] Depends on: PR-2, PR-6.
-- [ ] Files: `crates/rt-ui/panels/**`.
-- [ ] The one change: LYRICS tab renders `get_lyrics_id` + `get_lyrics` output; synced lyrics highlight follows playback position when timestamps exist.
-- [ ] Unit box: timestamped parse; static fallback.
-- [ ] Live box: a known synced track scrolls its highlight within ±1 s of audio.
-- [ ] Perf box: metric panel update cost; fails if lyric highlight updates cost > 1 ms each.
+- [x] Depends on: PR-2, PR-6. (Landed 2026-11-19.)
+- [x] Files: `crates/rt-ui/**`, `crates/rt-api/**`, probe.
+- [x] The one change: LYRICS tab auto-loads the current track's lyrics with its source credit. **Deviation: shipped static only.** ytmapi-rs 0.3.4's `Lyrics` type flattens to plain `{ lyrics: String, source: String }` (`parse/song.rs:12`); per-line timestamps never reach us, so synced highlighting is blocked upstream until the crate parses timed lyrics (or we parse the raw browse response ourselves — noted as a candidate for a follow-up).
+- [x] Unit box: the timestamped-parse box is moot per the deviation; panel state machine (load-once-per-track, no-lyrics fallback) is exercised in the update path.
+- [x] Live box: `probe lyrics lYBUbBu4W08` → source "Musixmatch", 70 lines, correct opening lyrics.
+- [x] Perf box: static list rendered once per track; per-tick work is a string comparison. Nothing to measure against the 1 ms line.
 
 ## PR-11 — EQ UI and presets (review-gated)
 

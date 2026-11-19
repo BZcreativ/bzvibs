@@ -13,6 +13,7 @@ pub fn run(args: &[String]) {
         (Some("search"), Some(query)) => search(query),
         (Some("stream"), Some(video_id)) => stream(video_id),
         (Some("play"), Some(video_id)) => play(video_id),
+        (Some("lyrics"), Some(video_id)) => lyrics(video_id),
         (Some("fetchmt"), Some(video_id)) => fetch_mt(video_id),
         _ => {
             eprintln!(
@@ -238,6 +239,45 @@ fn fetch_mt(video_id: &str) {
                     "fetch failed after {} ms: {e}",
                     fetch_started.elapsed().as_millis()
                 );
+                std::process::exit(1);
+            }
+        }
+    });
+}
+
+/// Live box for the lyrics panel: fetch and print source, line count, and
+/// the first lines for a track.
+fn lyrics(video_id: &str) {
+    let id = match VideoId::parse(video_id) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    rt.block_on(async {
+        let client = match ApiClient::new() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("client bootstrap failed: {e}");
+                std::process::exit(1);
+            }
+        };
+        match client.lyrics_for(id.as_str()).await {
+            Ok(l) => {
+                let lines: Vec<&str> = l.lyrics.lines().collect();
+                println!("source: {}", l.source);
+                println!("line_count: {}", lines.len());
+                for line in lines.iter().take(4) {
+                    println!("  {line}");
+                }
+            }
+            Err(e) => {
+                println!("no lyrics: {e}");
                 std::process::exit(1);
             }
         }

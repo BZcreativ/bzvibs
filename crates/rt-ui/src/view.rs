@@ -503,9 +503,36 @@ fn right_panel(app: &RustyTube) -> Element<'static, Message> {
                 body = body.push(scrollable(column(rows).spacing(2)).height(Fill));
             }
         }
-        RightTab::Lyrics => {
-            body = body.push(text("No lyrics loaded").size(12).color(p.text_dim));
-        }
+        RightTab::Lyrics => match &app.lyrics {
+            Some(l) if !l.lines.is_empty() => {
+                let mut col = column![].spacing(4);
+                for line in &l.lines {
+                    col = col.push(text(line.clone()).size(12).color(p.text));
+                }
+                body = body.push(scrollable(col).height(Fill));
+                if !l.source.is_empty() {
+                    body = body.push(
+                        text(format!("from {}", l.source))
+                            .size(10)
+                            .color(p.text_dim),
+                    );
+                }
+            }
+            Some(_) => {
+                body = body.push(text("No lyrics for this track").size(12).color(p.text_dim));
+            }
+            None => {
+                body = body.push(
+                    text(if app.status.current.is_some() {
+                        "Loading lyrics…"
+                    } else {
+                        "Play something to see lyrics"
+                    })
+                    .size(12)
+                    .color(p.text_dim),
+                );
+            }
+        },
         RightTab::Related => {
             body = body.push(text("Nothing related yet").size(12).color(p.text_dim));
         }

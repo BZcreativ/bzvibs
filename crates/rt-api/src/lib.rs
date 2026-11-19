@@ -66,6 +66,13 @@ impl ApiClient {
         Ok(self.ytm.get_lyrics(lyrics_id).await?)
     }
 
+    /// One-shot: video id to lyric text and source. Fails when the track
+    /// has no lyrics (the API surfaces that as an error).
+    pub async fn lyrics_for(&self, video_id: &str) -> Result<Lyrics, ApiError> {
+        let id = self.lyrics_id(video_id).await?;
+        self.lyrics(id).await
+    }
+
     pub async fn playlist_tracks(&self, playlist_id: &str) -> Result<Vec<PlaylistItem>, ApiError> {
         let id = PlaylistID::from_raw(playlist_id.to_string());
         Ok(self.ytm.get_playlist_tracks(id).await?)

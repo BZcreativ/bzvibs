@@ -67,6 +67,7 @@ pub enum Message {
     EqNameChanged(String),
     EqSavePressed,
     EqUserPresetsLoaded(Vec<rt_config::Preset>),
+    LyricsLoaded(String, std::result::Result<(String, String), String>),
     Noop,
 }
 
@@ -93,6 +94,15 @@ impl Default for EqUiState {
     }
 }
 
+/// Lyrics shown in the right panel: parsed at the boundary into owned
+/// strings, keyed by the video they belong to.
+#[derive(Debug, Clone)]
+pub struct LyricsState {
+    pub video_id: String,
+    pub lines: Vec<String>,
+    pub source: String,
+}
+
 pub struct RustyTube {
     pub section: Section,
     pub tab: RightTab,
@@ -104,6 +114,8 @@ pub struct RustyTube {
     pub volume: f32,
     pub theme_index: usize,
     pub eq: EqUiState,
+    pub lyrics: Option<LyricsState>,
+    lyrics_loading_for: Option<String>,
     pub player: Option<PlayerHandle>,
     pub api: Option<Arc<ApiClient>>,
 }
@@ -130,6 +142,8 @@ impl Default for RustyTube {
                 .map(|i| i % theme::THEMES.len())
                 .unwrap_or(0),
             eq: EqUiState::default(),
+            lyrics: None,
+            lyrics_loading_for: None,
             player: PlayerHandle::spawn().ok(),
             api: ApiClient::new().ok().map(Arc::new),
         }
@@ -196,6 +210,26 @@ impl RustyTube {
             Message::Tick => {
                 if let Some(player) = &self.player {
                     self.status = player.status();
+                }
+                // Load lyrics for whatever is playing, once per track.
+                let current = self.status.current.as_ref().map(|t| t.video_id.clone());
+                if let Some(video_id) = current
+                    && self.lyrics.as_ref().map(|l| &l.video_id) != Some(&video_id)
+                    && self.lyrics_loading_for.as_ref() != Some(&video_id)
+                    && let Some(api) = self.api.clone()
+                {
+                    let for_loading = video_id.clone();
+                    self.lyrics_loading_for = Some(video_id.clone());
+                    let for_message = video_id.clone();
+                    return Task::perform(
+                        async move {
+                            api.lyrics_for(&for_loading)
+                                .await
+                                .map(|l| (l.lyrics, l.source))
+                                .map_err(|e| e.to_string())
+                        },
+                        move |r| Message::LyricsLoaded(for_message, r),
+                    );
                 }
             }
             Message::PlayPressed => {
@@ -268,6 +302,23 @@ impl RustyTube {
             }
             Message::EqNameChanged(s) => self.eq.save_name = s,
             Message::EqUserPresetsLoaded(ps) => self.eq.user_presets = ps,
+            Message::LyricsLoaded(video_id, Ok((text, source))) => {
+                self.lyrics_loading_for = None;
+                self.lyrics = Some(LyricsState {
+                    video_id,
+                    lines: text.lines().map(str::to_string).collect(),
+                    source,
+                });
+            }
+            Message::LyricsLoaded(video_id, Err(_e)) => {
+                // Most tracks simply have no lyrics; keep the panel honest.
+                self.lyrics_loading_for = None;
+                self.lyrics = Some(LyricsState {
+                    video_id,
+                    lines: Vec::new(),
+                    source: String::new(),
+                });
+            }
             Message::EqSavePressed => {
                 let name = if self.eq.save_name.trim().is_empty() {
                     "Custom".to_string()
