@@ -321,6 +321,7 @@ fn topbar(app: &RustyTube) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let query = app.search_query.clone();
     let search = text_input("Search songs, albums, artists, podcasts…", &query)
+        .id(crate::SEARCH_INPUT_ID.to_string())
         .on_input(Message::SearchQueryChanged)
         .on_submit(Message::SearchSubmitted)
         .size(13)
@@ -718,10 +719,49 @@ fn stage(app: &RustyTube) -> Element<'static, Message> {
         Section::Library => library_stage(app),
         Section::Home => stage_inner(app),
     };
+    if app.help_open {
+        return column![base, help_overlay(app)].spacing(8).into();
+    }
     if app.new_playlist.is_some() {
         return column![base, new_playlist_dialog(app)].spacing(8).into();
     }
     base
+}
+
+fn help_overlay(app: &RustyTube) -> Element<'static, Message> {
+    let p = theme::at(app.theme_index);
+    let mut rows = column![].spacing(4);
+    for (label, keys) in crate::shortcuts::TABLE {
+        rows = rows.push(
+            row![
+                text(label)
+                    .size(12)
+                    .color(p.text)
+                    .width(Length::Fixed(190.0)),
+                text(keys).size(12).color(p.accent),
+            ]
+            .spacing(12),
+        );
+    }
+    let card = column![
+        text("Keyboard shortcuts").size(18).color(p.text),
+        rows,
+        text("Press ? again to close").size(10).color(p.text_dim),
+    ]
+    .spacing(12)
+    .padding(20);
+    container(card)
+        .width(Length::Fixed(380.0))
+        .style(move |_t| container::Style {
+            background: Some(Background::Color(p.bg_panel)),
+            border: Border {
+                radius: 16.0.into(),
+                color: p.accent,
+                width: 1.0,
+            },
+            ..container::Style::default()
+        })
+        .into()
 }
 
 // ---------- equalizer stage ----------

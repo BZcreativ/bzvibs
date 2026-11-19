@@ -3,6 +3,7 @@
 
 pub mod eq_faders;
 pub mod fonts;
+pub mod shortcuts;
 pub mod state;
 pub mod theme;
 pub mod view;
@@ -67,6 +68,8 @@ pub enum Message {
     NewPlaylistNameChanged(String),
     NewPlaylistSubmitted,
     NewPlaylistCreated(std::result::Result<String, String>),
+    KeyPressed(iced::keyboard::Key, iced::keyboard::Modifiers),
+    HelpToggled,
     Tick,
     PlayPressed,
     NextPressed,
@@ -162,6 +165,13 @@ pub struct RustyTube {
     pub active_chip: usize,
     /// `Some(name)` while the New playlist dialog is open.
     pub new_playlist: Option<String>,
+    /// Set while the user types in the search field; gates bare-key
+    /// shortcuts so typing is never intercepted.
+    pub typing: bool,
+    /// True while the `?` shortcut overlay is open.
+    pub help_open: bool,
+    /// Volume before mute, restored on unmute.
+    mute_level: f32,
     auth_session: Option<Arc<rt_api::SignInSession>>,
     pub authed: Option<Arc<rt_api::AuthedClient>>,
     pub player: Option<PlayerHandle>,
@@ -198,6 +208,9 @@ impl Default for RustyTube {
             auth: AuthState::SignedOut,
             active_chip: 0,
             new_playlist: None,
+            typing: false,
+            help_open: false,
+            mute_level: 1.0,
             auth_session: None,
             authed: None,
             player: PlayerHandle::spawn().ok(),
@@ -210,6 +223,9 @@ impl Default for RustyTube {
 /// queue. Chips in the right panel map onto moods later; the default is
 /// deliberately broad.
 pub const DEFAULT_QUERY: &str = "today's hits";
+
+/// Widget id for the search field, so Ctrl+K can focus it.
+pub const SEARCH_INPUT_ID: &str = "rt-search";
 
 /// Right-panel filter chips, index 0 is the unfiltered queue.
 pub const CHIPS: [&str; 5] = ["All", "Chill", "Focus", "Sleep", "Familiar"];
@@ -289,9 +305,17 @@ impl RustyTube {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::NavSelected(s) => self.section = s,
+            Message::NavSelected(s) => {
+                // Clicking navigation means the search field is not in use.
+                self.typing = false;
+                self.section = s;
+            }
             Message::TabSelected(t) => self.tab = t,
-            Message::SearchQueryChanged(q) => self.search_query = q,
+            Message::SearchQueryChanged(q) => {
+                // Typing in the field: bare-key shortcuts must not fire.
+                self.typing = true;
+                self.search_query = q;
+            }
             Message::SearchSubmitted => {
                 let query = self.search_query.clone();
                 if query.trim().is_empty() {
@@ -437,6 +461,72 @@ impl RustyTube {
             Message::NewPlaylistCreated(Err(e)) => {
                 self.status.error = Some(format!("create playlist: {e}"));
             }
+            Message::KeyPressed(key, modifiers) => {
+                use shortcuts::Shortcut;
+                let Some(action) = shortcuts::resolve(&key, modifiers, self.typing) else {
+                    return Task::none();
+                };
+                match action {
+                    Shortcut::PlayPause => {
+                        if let Some(p) = &self.player {
+                            p.send(Cmd::Toggle);
+                        }
+                    }
+                    Shortcut::SeekBack | Shortcut::SeekForward => {
+                        let dur = self.status.duration_secs.max(1.0);
+                        let delta = if action == Shortcut::SeekForward {
+                            5.0
+                        } else {
+                            -5.0
+                        };
+                        let target = (self.status.position_secs + delta).clamp(0.0, dur);
+                        if let Some(p) = &self.player {
+                            p.send(Cmd::Seek((target / dur) as f32));
+                        }
+                    }
+                    Shortcut::VolumeUp | Shortcut::VolumeDown => {
+                        let step = if action == Shortcut::VolumeUp {
+                            0.05
+                        } else {
+                            -0.05
+                        };
+                        self.volume = (self.volume + step).clamp(0.0, 1.0);
+                        if let Some(p) = &self.player {
+                            p.send(Cmd::SetVolume((self.volume * 1000.0) as u32));
+                        }
+                    }
+                    Shortcut::Mute => {
+                        if self.volume > 0.0 {
+                            self.mute_level = self.volume;
+                            self.volume = 0.0;
+                        } else {
+                            self.volume = if self.mute_level > 0.0 {
+                                self.mute_level
+                            } else {
+                                1.0
+                            };
+                        }
+                        if let Some(p) = &self.player {
+                            p.send(Cmd::SetVolume((self.volume * 1000.0) as u32));
+                        }
+                    }
+                    Shortcut::FocusSearch => {
+                        self.typing = true;
+                        return iced::widget::operation::focus(SEARCH_INPUT_ID.to_string());
+                    }
+                    Shortcut::Home => self.section = Section::Home,
+                    Shortcut::Explore => self.section = Section::Explore,
+                    Shortcut::Library => self.section = Section::Library,
+                    Shortcut::Equalizer => self.section = Section::Equalizer,
+                    Shortcut::Like => {
+                        // Same path as the thumbs-up button: the like API
+                        // needs the signed-in client and is not wired yet.
+                        let _ = Message::ThumbsUp;
+                    }
+                    Shortcut::Help => self.help_open = !self.help_open,
+                }
+            }
+            Message::HelpToggled => self.help_open = !self.help_open,
             Message::SearchDone(Err(e)) => {
                 self.status.error = Some(format!("search: {e}"));
             }
@@ -679,7 +769,21 @@ impl RustyTube {
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
         // 20 fps: smooth visualizer decay without hammering the UI.
-        iced::time::every(Duration::from_millis(50)).map(|_| Message::Tick)
+        let tick = iced::time::every(Duration::from_millis(50)).map(|_| Message::Tick);
+        let keys = iced::keyboard::listen().filter_map(|event| match event {
+            iced::keyboard::Event::KeyPressed {
+                modified_key,
+                modifiers,
+                repeat,
+                ..
+            } => {
+                // Key repeat would retrigger seeks/volume dozens of
+                // times per second; take the first press only.
+                (!repeat).then_some(Message::KeyPressed(modified_key, modifiers))
+            }
+            _ => None,
+        });
+        iced::Subscription::batch([tick, keys])
     }
 }
 
