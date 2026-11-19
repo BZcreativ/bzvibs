@@ -178,3 +178,5 @@ Ordered per the operator's brief; PR-13 landed, the rest queued.
 - DEF-06 chips: clickable, re-run the queue search per mood (InnerTube exposes no anonymous continuation-token filter — deviation documented).
 - DEF-03 New playlist: modal + `AuthedClient::create_playlist` (private); disabled with instruction when signed out.
 - DEF-05 Video: still deferred by design (needs a video decode/render pipeline); Song/Video pills remain non-functional for Video and the operator's spec lists it last.
+
+- PR-16 keyboard shortcuts: LANDED. Space/arrows (bare, suppressed while typing), Ctrl+K/E/L/M/1/2/3, '?' help overlay. Resolution is a pure tested function; Ctrl+K focuses the search field via widget id. Like (L) maps to the existing no-op thumbs-up until the like API is wired with auth.
