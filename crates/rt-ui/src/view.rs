@@ -369,14 +369,23 @@ fn mode_pills(app: &RustyTube) -> Element<'static, Message> {
             ..button::Style::default()
         });
     let video = button(text("Video").size(12))
-        .on_press(Message::Noop)
         .padding([5, 16])
         .style(move |_t, _s| button::Style {
             border: pill_border(p.bg_card_active),
             text_color: p.text_dim,
             ..button::Style::default()
         });
-    row![song, video].spacing(6).into()
+    // Honest disabled affordance: no press handler, caption explains why.
+    row![
+        song,
+        video,
+        text("video mode is a later milestone")
+            .size(10)
+            .color(p.text_dim),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .into()
 }
 
 fn visualizer_card(app: &RustyTube) -> Element<'static, Message> {
