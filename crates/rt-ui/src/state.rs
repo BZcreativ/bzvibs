@@ -7,6 +7,7 @@ pub enum Section {
     Explore,
     Library,
     Equalizer,
+    Settings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

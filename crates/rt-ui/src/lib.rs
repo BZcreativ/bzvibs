@@ -2,6 +2,7 @@
 //! to search and playback (PR-7).
 
 pub mod eq_faders;
+pub mod fonts;
 pub mod state;
 pub mod theme;
 pub mod view;
@@ -80,6 +81,8 @@ pub enum Message {
     EqDeletePressed,
     EqUserPresetsLoaded(Vec<rt_config::Preset>),
     LyricsLoaded(String, std::result::Result<(String, String), String>),
+    PrefsFontChanged(rt_config::ui_prefs::FontChoice),
+    PrefsTextSizeChanged(rt_config::ui_prefs::TextSize),
     Noop,
 }
 
@@ -139,6 +142,7 @@ pub struct RustyTube {
     pub repeat: Repeat,
     pub volume: f32,
     pub theme_index: usize,
+    pub prefs: rt_config::ui_prefs::UiPrefs,
     pub eq: EqUiState,
     pub lyrics: Option<LyricsState>,
     lyrics_loading_for: Option<String>,
@@ -173,6 +177,7 @@ impl Default for RustyTube {
                 .and_then(|v| v.parse::<usize>().ok())
                 .map(|i| i % theme::THEMES.len())
                 .unwrap_or(0),
+            prefs: rt_config::ui_prefs::load(),
             eq: EqUiState::default(),
             lyrics: None,
             lyrics_loading_for: None,
@@ -435,6 +440,18 @@ impl RustyTube {
             Message::ThemeCycled => {
                 self.theme_index = (self.theme_index + 1) % theme::THEMES.len();
             }
+            Message::PrefsFontChanged(f) => {
+                self.prefs.font = f;
+                if let Err(e) = rt_config::ui_prefs::store(&self.prefs) {
+                    self.status.error = Some(format!("prefs save: {e}"));
+                }
+            }
+            Message::PrefsTextSizeChanged(s) => {
+                self.prefs.text_size = s;
+                if let Err(e) = rt_config::ui_prefs::store(&self.prefs) {
+                    self.status.error = Some(format!("prefs save: {e}"));
+                }
+            }
             Message::EqGainChanged(i, v) => {
                 if i < 8 {
                     self.eq.gains_db[i] = v.clamp(-12.0, 12.0);
@@ -567,8 +584,14 @@ impl RustyTube {
 
 /// Open the RustyTube window. Blocks until the window closes.
 pub fn run() -> Result {
+    let prefs = rt_config::ui_prefs::load();
+    let font = fonts::resolved_font(prefs.font);
     iced::application(RustyTube::boot, RustyTube::update, RustyTube::view)
         .title("RustyTube")
+        // Inter is bundled; register it so Font::with_name("Inter") resolves.
+        .font(fonts::INTER_TTF)
+        // The stored font choice applies to every text in the app.
+        .default_font(font)
         .window(iced::window::Settings {
             size: iced::Size::new(1280.0, 800.0),
             // Start maximized: the shell is Fill-based and adapts to whatever
@@ -577,6 +600,10 @@ pub fn run() -> Result {
             resizable: true,
             ..Default::default()
         })
+        // Global interface scaling from the text-size setting: text,
+        // padding, and controls scale together. Reads live state, so
+        // changing the size applies immediately.
+        .scale_factor(|state: &RustyTube| state.prefs.text_size.scale())
         .subscription(RustyTube::subscription)
         .run()
 }

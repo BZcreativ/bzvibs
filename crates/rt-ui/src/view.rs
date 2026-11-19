@@ -11,7 +11,9 @@ use crate::theme::{self, Palette};
 use crate::{AuthState, Message, RightTab, RustyTube, Section};
 
 use iced::widget::slider::{Handle, HandleShape, Rail};
-use iced::widget::{button, column, container, row, scrollable, slider, text, text_input};
+use iced::widget::{
+    button, column, container, pick_list, row, scrollable, slider, text, text_input,
+};
 use iced::{Alignment, Background, Border, Color, Element, Fill, Length};
 use rt_player::TransportState;
 
@@ -45,6 +47,83 @@ fn pill_border(color: Color) -> Border {
     }
 }
 
+// ---------- shared button design system ----------
+// Four kinds, one geometry: primary (accent gradient, strong actions),
+// secondary (card fill, visible actions), ghost (transparent, tertiary),
+// destructive-adjacent actions use secondary with dim text. All get hover
+// brightening and consistent padding; disabled is dim text on transparent.
+
+const BTN_PAD: [f32; 2] = [6.0, 14.0];
+
+fn text_button(
+    p: &'static Palette,
+    label: String,
+    kind: ButtonKind,
+    enabled: bool,
+    msg: Message,
+) -> button::Button<'static, Message> {
+    button(text(label).size(12))
+        .on_press_maybe(enabled.then_some(msg))
+        .padding(BTN_PAD)
+        .style(move |_t, status| {
+            let hovered = status == button::Status::Hovered;
+            let disabled = !enabled;
+            let (bg, fg) = match kind {
+                ButtonKind::Primary => (
+                    if disabled {
+                        p.bg_card
+                    } else if hovered {
+                        p.accent_soft
+                    } else {
+                        p.accent
+                    },
+                    on_accent(p),
+                ),
+                ButtonKind::Secondary => {
+                    if disabled {
+                        (p.bg_card, p.text_dim)
+                    } else if hovered {
+                        (p.bg_card_active, p.text)
+                    } else {
+                        (p.bg_card, p.text)
+                    }
+                }
+                ButtonKind::Ghost => {
+                    if disabled {
+                        (Color::TRANSPARENT, p.text_dim)
+                    } else if hovered {
+                        (p.bg_card, p.text)
+                    } else {
+                        (Color::TRANSPARENT, p.text_dim)
+                    }
+                }
+            };
+            button::Style {
+                background: Some(Background::Color(bg)),
+                border: match kind {
+                    ButtonKind::Primary => Border {
+                        radius: 999.0.into(),
+                        ..Border::default()
+                    },
+                    ButtonKind::Secondary | ButtonKind::Ghost => pill_border(if disabled {
+                        p.bg_card
+                    } else {
+                        p.bg_card_active
+                    }),
+                },
+                text_color: fg,
+                ..button::Style::default()
+            }
+        })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ButtonKind {
+    Primary,
+    Secondary,
+    Ghost,
+}
+
 // ---------- sidebar ----------
 
 fn sidebar(app: &RustyTube) -> Element<'static, Message> {
@@ -59,12 +138,13 @@ fn sidebar(app: &RustyTube) -> Element<'static, Message> {
     .spacing(8)
     .align_y(Alignment::Center);
 
-    let nav = ["Home", "Explore", "Library", "Equalizer"];
+    let nav = ["Home", "Explore", "Library", "Equalizer", "Settings"];
     let sections = [
         Section::Home,
         Section::Explore,
         Section::Library,
         Section::Equalizer,
+        Section::Settings,
     ];
     let mut nav_col = column![].spacing(4);
     for (label, section) in nav.iter().zip(sections) {
@@ -337,10 +417,90 @@ fn visualizer_card(app: &RustyTube) -> Element<'static, Message> {
         .into()
 }
 
+// ---------- settings stage ----------
+
+fn settings_stage(app: &RustyTube) -> Element<'static, Message> {
+    let p = theme::at(app.theme_index);
+
+    let heading = text("Settings").size(24).color(p.text);
+
+    // Appearance: theme cycler.
+    let theme_label = format!("◑ {}", p.name);
+    let appearance = column![
+        text("Appearance").size(15).color(p.text),
+        button(text(theme_label).size(12))
+            .on_press(Message::ThemeCycled)
+            .padding([6, 14])
+            .style(move |_t, _s| button::Style {
+                background: Some(Background::Color(p.bg_card)),
+                border: pill_border(p.bg_card_active),
+                text_color: p.text,
+                ..button::Style::default()
+            }),
+    ]
+    .spacing(6);
+
+    // Typography: font family and interface text size pick lists.
+    let font_row = row![
+        text("Font")
+            .size(13)
+            .color(p.text_dim)
+            .width(Length::Fixed(140.0)),
+        pick_list(
+            rt_config::ui_prefs::FontChoice::all(),
+            Some(app.prefs.font),
+            Message::PrefsFontChanged,
+        )
+        .width(Length::Fixed(180.0))
+        .text_size(12),
+        text("applies after restart").size(10).color(p.text_dim),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center);
+
+    let size_row = row![
+        text("Interface size")
+            .size(13)
+            .color(p.text_dim)
+            .width(Length::Fixed(140.0)),
+        pick_list(
+            rt_config::ui_prefs::TextSize::all(),
+            Some(app.prefs.text_size),
+            Message::PrefsTextSizeChanged,
+        )
+        .width(Length::Fixed(180.0))
+        .text_size(12),
+        text(format!("scale ×{:.2}", app.prefs.text_size.scale()))
+            .size(10)
+            .color(p.text_dim),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center);
+
+    let typography = column![
+        text("Typography").size(15).color(p.text),
+        font_row,
+        size_row,
+        text("The size setting scales the whole interface immediately; the font switch needs a restart.")
+            .size(10)
+            .color(p.text_dim),
+    ]
+    .spacing(8);
+
+    column![heading, appearance, typography]
+        .spacing(18)
+        .padding(24)
+        .width(Fill)
+        .into()
+}
+
 fn stage(app: &RustyTube) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     if app.section == Section::Equalizer {
         return eq_stage(app);
+    }
+    if app.section == Section::Settings {
+        return settings_stage(app);
     }
     let mut col = column![mode_pills(app), visualizer_card(app)]
         .spacing(14)
@@ -437,11 +597,13 @@ fn eq_stage(app: &RustyTube) -> Element<'static, Message> {
         .user_presets
         .iter()
         .any(|p| p.name == app.eq.preset_name);
+    // Unified design system: primary = Save, secondary = Rename/Delete
+    // (disabled unless a user preset is selected), ghost = Reset.
     let action_row = row![
         text_input("preset name", &save_name)
             .on_input(Message::EqNameChanged)
             .size(12)
-            .padding([4, 10])
+            .padding([6, 12])
             .style(move |_t, _s| text_input::Style {
                 background: Color::from_rgba(0.0, 0.0, 0.0, 0.35).into(),
                 border: pill_border(p.bg_card_active),
@@ -451,49 +613,34 @@ fn eq_stage(app: &RustyTube) -> Element<'static, Message> {
                 selection: p.accent,
             })
             .width(Length::Fixed(170.0)),
-        button(text("Save".to_string()).size(11))
-            .on_press(Message::EqSavePressed)
-            .padding([4, 12])
-            .style(move |_t, _s| button::Style {
-                background: Some(accent_gradient(p)),
-                border: pill_border(Color::TRANSPARENT),
-                text_color: on_accent(p),
-                ..button::Style::default()
-            }),
-        button(text("Rename".to_string()).size(11))
-            .on_press(Message::EqRenamePressed)
-            .padding([4, 12])
-            .style(move |_t, _s| button::Style {
-                background: Some(Background::Color(if is_user_preset {
-                    p.bg_card_active
-                } else {
-                    p.bg_card
-                })),
-                border: pill_border(Color::TRANSPARENT),
-                text_color: p.text,
-                ..button::Style::default()
-            }),
-        button(text("Delete".to_string()).size(11))
-            .on_press(Message::EqDeletePressed)
-            .padding([4, 12])
-            .style(move |_t, _s| button::Style {
-                background: Some(Background::Color(if is_user_preset {
-                    p.bg_card_active
-                } else {
-                    p.bg_card
-                })),
-                border: pill_border(Color::TRANSPARENT),
-                text_color: p.text,
-                ..button::Style::default()
-            }),
-        button(text("Reset".to_string()).size(11))
-            .on_press(Message::EqResetPressed)
-            .padding([4, 12])
-            .style(move |_t, _s| button::Style {
-                border: pill_border(p.bg_card_active),
-                text_color: p.text_dim,
-                ..button::Style::default()
-            }),
+        text_button(
+            p,
+            "Save".into(),
+            ButtonKind::Primary,
+            true,
+            Message::EqSavePressed
+        ),
+        text_button(
+            p,
+            "Rename".into(),
+            ButtonKind::Secondary,
+            is_user_preset,
+            Message::EqRenamePressed,
+        ),
+        text_button(
+            p,
+            "Delete".into(),
+            ButtonKind::Secondary,
+            is_user_preset,
+            Message::EqDeletePressed,
+        ),
+        text_button(
+            p,
+            "Reset".into(),
+            ButtonKind::Ghost,
+            true,
+            Message::EqResetPressed
+        ),
     ]
     .spacing(8)
     .align_y(Alignment::Center);

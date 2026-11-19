@@ -1,6 +1,8 @@
-//! EQ presets: one JSON file per named preset under the config dir, plus
-//! the built-ins. The engine consumes plain `[f32; 8]` gains; this crate
-//! owns persistence so the UI never touches files.
+//! EQ presets and UI appearance preferences, persisted under the config
+//! dir. The engine consumes plain `[f32; 8]` gains; this crate owns
+//! persistence so the UI never touches files.
+
+pub mod ui_prefs;
 
 use rt_audio::BAND_FREQS_HZ;
 use std::path::PathBuf;
