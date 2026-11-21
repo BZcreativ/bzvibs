@@ -70,7 +70,16 @@ fn band_under(bounds: &Rectangle, x: f32) -> Option<usize> {
 /// the ABSOLUTE widget bounds. This function is the regression surface for
 /// the coordinate-space bug (relative coords once selected a band two slots
 /// to the left).
+///
+/// Only the track area (between the dB values and the frequency labels)
+/// starts a drag. Presses on the labels themselves or outside the widget
+/// are ignored — clicking the "250 Hz" caption must not yank that fader.
 fn press_target(bounds: &Rectangle, cursor_abs: Point) -> Option<(usize, f32)> {
+    let top = bounds.y + TOP_PAD - 6.0;
+    let bottom = bounds.y + bounds.height - BOTTOM_PAD + 6.0;
+    if cursor_abs.y < top || cursor_abs.y > bottom {
+        return None;
+    }
     let band = band_under(bounds, cursor_abs.x)?;
     Some((band, gain_for_y(bounds, cursor_abs.y)))
 }
@@ -111,9 +120,15 @@ impl canvas::Program<Message> for EqFaders {
             iced::mouse::Event::CursorMoved { .. } => {
                 let drag = state.as_ref()?;
                 let pos = cursor.position()?;
+                // Clamp the drag to the track area so sweeping across the
+                // labels cannot spike the gain; horizontal drift does not
+                // change the band mid-drag.
+                let y = pos
+                    .y
+                    .clamp(bounds.y + TOP_PAD, bounds.y + bounds.height - BOTTOM_PAD);
                 Some(canvas::Action::publish(Message::EqGainChanged(
                     drag.band,
-                    gain_for_y(&bounds, pos.y),
+                    gain_for_y(&bounds, y),
                 )))
             }
             iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left) => {
@@ -290,6 +305,23 @@ mod tests {
         let b = Rectangle::new(Point::new(267.0, 120.0), iced::Size::new(1290.0, 260.0));
         assert!(press_target(&b, Point::new(10.0, 200.0)).is_none());
         assert!(press_target(&b, Point::new(1600.0, 200.0)).is_none());
+    }
+
+    #[test]
+    fn pressing_the_label_rows_does_not_move_a_fader() {
+        // Regression: the hit area once covered the dB values and the
+        // frequency captions, so clicking "250 Hz" dragged that fader to
+        // the clicked height.
+        let b = Rectangle::new(Point::new(267.0, 120.0), iced::Size::new(1290.0, 260.0));
+        // Above the tracks (dB value row).
+        let above = Point::new(band_center_x(&b, 1), b.y + TOP_PAD - 10.0);
+        assert!(press_target(&b, above).is_none(), "dB row must not drag");
+        // Below the tracks (frequency caption row).
+        let below = Point::new(band_center_x(&b, 1), b.y + b.height - BOTTOM_PAD + 10.0);
+        assert!(press_target(&b, below).is_none(), "Hz row must not drag");
+        // Far above the widget entirely.
+        let way_above = Point::new(band_center_x(&b, 3), b.y - 50.0);
+        assert!(press_target(&b, way_above).is_none());
     }
 
     #[test]

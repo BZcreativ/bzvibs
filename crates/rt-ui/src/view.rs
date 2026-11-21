@@ -8,7 +8,7 @@
 //! booleans), never the app borrow, so widgets stay 'static.
 
 use crate::theme::{self, Palette};
-use crate::{AuthState, Message, RightTab, RustyTube, Section};
+use crate::{AuthState, BzvibsApp, Message, RightTab, Section};
 
 use iced::widget::slider::{Handle, HandleShape, Rail};
 use iced::widget::{
@@ -126,7 +126,7 @@ enum ButtonKind {
 
 // ---------- sidebar ----------
 
-fn sidebar(app: &RustyTube) -> Element<'static, Message> {
+fn sidebar(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let brand = row![
         text("▮▮▮")
@@ -317,7 +317,7 @@ fn palette_of(p: &Palette) -> &'static Palette {
 
 // ---------- top bar ----------
 
-fn topbar(app: &RustyTube) -> Element<'static, Message> {
+fn topbar(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let query = app.search_query.clone();
     let search = text_input("Search songs, albums, artists, podcasts…", &query)
@@ -355,7 +355,7 @@ fn topbar(app: &RustyTube) -> Element<'static, Message> {
 
 // ---------- center stage ----------
 
-fn mode_pills(app: &RustyTube) -> Element<'static, Message> {
+fn mode_pills(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let song = button(text("Song").size(12))
         .padding([5, 16])
@@ -388,7 +388,7 @@ fn mode_pills(app: &RustyTube) -> Element<'static, Message> {
     .into()
 }
 
-fn visualizer_card(app: &RustyTube) -> Element<'static, Message> {
+fn visualizer_card(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let transport = app.status.transport.clone();
     let loading = matches!(transport, TransportState::Loading(_));
@@ -442,7 +442,7 @@ fn visualizer_card(app: &RustyTube) -> Element<'static, Message> {
 
 // ---------- settings stage ----------
 
-fn settings_stage(app: &RustyTube) -> Element<'static, Message> {
+fn settings_stage(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
 
     let heading = text("Settings").size(24).color(p.text);
@@ -540,7 +540,7 @@ fn tile(p: &'static Palette, label: String, msg: Message) -> button::Button<'sta
         })
 }
 
-fn explore_stage(app: &RustyTube) -> Element<'static, Message> {
+fn explore_stage(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let mut grid = column![].spacing(10);
     for chunk in crate::MOODS.chunks(3) {
@@ -566,7 +566,7 @@ fn explore_stage(app: &RustyTube) -> Element<'static, Message> {
     .into()
 }
 
-fn library_stage(app: &RustyTube) -> Element<'static, Message> {
+fn library_stage(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     match &app.auth {
         AuthState::SignedIn { playlists } => {
@@ -643,7 +643,7 @@ fn library_stage(app: &RustyTube) -> Element<'static, Message> {
 
 /// Primary sign-in: paste the browser session's cookie header. This is the
 /// method that needs no Google Cloud project, so it is the default path.
-fn browser_cookie_card(app: &RustyTube) -> Element<'static, Message> {
+fn browser_cookie_card(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let value = app.browser_cookie.clone().unwrap_or_default();
 
@@ -724,7 +724,7 @@ fn browser_cookie_card(app: &RustyTube) -> Element<'static, Message> {
 /// In-app OAuth client setup: the credentials a user must create in Google
 /// Cloud, pasted once and stored in the OS keychain. Removes the need for
 /// environment variables when the app is launched by double-click.
-fn oauth_setup_card(app: &RustyTube) -> Element<'static, Message> {
+fn oauth_setup_card(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let (id, secret) = app.auth_setup.clone().unwrap_or_default();
 
@@ -809,7 +809,7 @@ fn oauth_setup_card(app: &RustyTube) -> Element<'static, Message> {
         .into()
 }
 
-fn new_playlist_dialog(app: &RustyTube) -> Element<'static, Message> {
+fn new_playlist_dialog(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let Some(name) = &app.new_playlist else {
         return row![].into();
@@ -875,7 +875,7 @@ fn new_playlist_dialog(app: &RustyTube) -> Element<'static, Message> {
         .into()
 }
 
-fn stage_inner(app: &RustyTube) -> Element<'static, Message> {
+fn stage_inner(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let mut col = column![mode_pills(app), visualizer_card(app)]
         .spacing(14)
@@ -900,7 +900,7 @@ fn stage_inner(app: &RustyTube) -> Element<'static, Message> {
 }
 
 /// Section dispatch plus the New playlist dialog overlay.
-fn stage(app: &RustyTube) -> Element<'static, Message> {
+fn stage(app: &BzvibsApp) -> Element<'static, Message> {
     let base = match app.section {
         Section::Equalizer => eq_stage(app),
         Section::Settings => settings_stage(app),
@@ -917,7 +917,7 @@ fn stage(app: &RustyTube) -> Element<'static, Message> {
     base
 }
 
-fn help_overlay(app: &RustyTube) -> Element<'static, Message> {
+fn help_overlay(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let mut rows = column![].spacing(4);
     for (label, keys) in crate::shortcuts::TABLE {
@@ -976,7 +976,7 @@ fn eq_preset_chip(
         })
 }
 
-fn eq_stage(app: &RustyTube) -> Element<'static, Message> {
+fn eq_stage(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
 
     let eq_enabled = app.eq.enabled;
@@ -1134,7 +1134,7 @@ fn chips_with(p: &'static Palette, selected: usize) -> Element<'static, Message>
     chips.into()
 }
 
-fn queue_row(app: &RustyTube, i: usize) -> Element<'static, Message> {
+fn queue_row(app: &BzvibsApp, i: usize) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let t = &app.results[i];
     let active = app
@@ -1176,7 +1176,7 @@ fn queue_row(app: &RustyTube, i: usize) -> Element<'static, Message> {
         .into()
 }
 
-fn right_panel(app: &RustyTube) -> Element<'static, Message> {
+fn right_panel(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let tabs = ["UP NEXT", "LYRICS", "RELATED"];
     let tab_vals = [RightTab::UpNext, RightTab::Lyrics, RightTab::Related];
@@ -1320,7 +1320,7 @@ where
     })
 }
 
-fn playback_bar(app: &RustyTube) -> Element<'static, Message> {
+fn playback_bar(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let playing = app.status.transport == TransportState::Playing;
     let paused = app.status.transport == TransportState::Paused;
@@ -1365,7 +1365,7 @@ fn playback_bar(app: &RustyTube) -> Element<'static, Message> {
 // ---------- root ----------
 
 fn panel<'a>(
-    app: &RustyTube,
+    app: &BzvibsApp,
     content: impl Into<Element<'a, Message>>,
 ) -> container::Container<'a, Message> {
     let bg = theme::at(app.theme_index).bg_panel;
@@ -1375,7 +1375,7 @@ fn panel<'a>(
     })
 }
 
-pub fn view(app: &RustyTube) -> Element<'static, Message> {
+pub fn view(app: &BzvibsApp) -> Element<'static, Message> {
     let bg = theme::at(app.theme_index).bg_base;
     let p = theme::at(app.theme_index);
     let body = row![

@@ -155,7 +155,7 @@ pub enum AuthState {
     },
 }
 
-pub struct RustyTube {
+pub struct BzvibsApp {
     pub section: Section,
     pub tab: RightTab,
     pub search_query: String,
@@ -197,9 +197,9 @@ pub struct RustyTube {
     pub api: Option<Arc<ApiClient>>,
 }
 
-impl Default for RustyTube {
+impl Default for BzvibsApp {
     fn default() -> Self {
-        RustyTube {
+        BzvibsApp {
             section: match std::env::var("RT_SECTION").as_deref() {
                 Ok("equalizer") => Section::Equalizer,
                 Ok("explore") => Section::Explore,
@@ -270,16 +270,16 @@ pub const STARTER_MIXES: [(&str, &str); 4] = [
     ("Ambient", "ambient music"),
 ];
 
-impl RustyTube {
+impl BzvibsApp {
     pub fn new() -> Self {
-        RustyTube::default()
+        BzvibsApp::default()
     }
 
     /// Boot with content already loading: the default query fills the stage
     /// and the queue without a keystroke, and a stored Google token (if any)
     /// restores the signed-in session.
-    pub fn boot() -> (RustyTube, Task<Message>) {
-        let mut app = RustyTube::new();
+    pub fn boot() -> (BzvibsApp, Task<Message>) {
+        let mut app = BzvibsApp::new();
         app.search_query = DEFAULT_QUERY.to_string();
         let search = app.update(Message::SearchSubmitted);
         let presets = Task::perform(
@@ -925,12 +925,12 @@ impl RustyTube {
     }
 }
 
-/// Open the RustyTube window. Blocks until the window closes.
+/// Open the bzvibs window. Blocks until the window closes.
 pub fn run() -> Result {
     let prefs = rt_config::ui_prefs::load();
     let font = fonts::resolved_font(prefs.font);
-    iced::application(RustyTube::boot, RustyTube::update, RustyTube::view)
-        .title("RustyTube")
+    iced::application(BzvibsApp::boot, BzvibsApp::update, BzvibsApp::view)
+        .title("bzvibs")
         // Inter is bundled; register it so Font::with_name("Inter") resolves.
         .font(fonts::INTER_TTF)
         // The stored font choice applies to every text in the app.
@@ -946,7 +946,7 @@ pub fn run() -> Result {
         // Global interface scaling from the text-size setting: text,
         // padding, and controls scale together. Reads live state, so
         // changing the size applies immediately.
-        .scale_factor(|state: &RustyTube| state.prefs.text_size.scale())
-        .subscription(RustyTube::subscription)
+        .scale_factor(|state: &BzvibsApp| state.prefs.text_size.scale())
+        .subscription(BzvibsApp::subscription)
         .run()
 }
