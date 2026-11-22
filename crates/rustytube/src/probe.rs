@@ -16,10 +16,16 @@ pub fn run(args: &[String]) {
         (Some("play"), Some(video_id)) => play(video_id),
         (Some("lyrics"), Some(video_id)) => lyrics(video_id),
         (Some("auth"), _) => auth(),
+        (Some("cookie"), Some(path)) => cookie(path),
+        (Some("login"), maybe_timeout) => login(
+            maybe_timeout
+                .and_then(|t| t.parse::<u64>().ok())
+                .unwrap_or(300),
+        ),
         (Some("fetchmt"), Some(video_id)) => fetch_mt(video_id),
         _ => {
             eprintln!(
-                "usage: rustytube probe search <query> | probe stream <video_id> | probe play <video_id>"
+                "usage: bzvibs probe search <query> | probe stream <video_id> | probe play <video_id> | probe cookie <file> | probe auth"
             );
             std::process::exit(2);
         }
@@ -357,6 +363,120 @@ fn auth() {
                 std::process::exit(1);
             }
         };
+        match client.playlists().await {
+            Ok(briefs) => {
+                println!("signed in. playlists: {}", briefs.len());
+                for b in briefs.iter().take(10) {
+                    println!("  {} ({})", b.title, b.track_count);
+                }
+                println!("PASS");
+            }
+            Err(e) => {
+                println!("playlist fetch failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    });
+}
+
+/// `bzvibs probe login [timeout_secs]` — one-click sign-in check: opens
+/// the login browser, waits for the Google login, then connects and
+/// lists playlists with the harvested session.
+fn login(timeout_secs: u64) {
+    println!("opening the sign-in browser…");
+    let browser = match rt_api::browser_login::open_login_browser() {
+        Ok(b) => Arc::new(b),
+        Err(e) => {
+            println!("launch failed: {e}");
+            std::process::exit(1);
+        }
+    };
+    println!("sign-in window open; waiting for you to finish the Google login…");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    let cookie = rt.block_on(async {
+        browser
+            .wait_for_cookie(Duration::from_secs(timeout_secs))
+            .await
+    });
+    let browser = Arc::try_unwrap(browser).ok();
+    drop(browser);
+    let cookie = match cookie {
+        Ok(c) => c,
+        Err(e) => {
+            println!("no session: {e}");
+            std::process::exit(1);
+        }
+    };
+    println!("session harvested; connecting…");
+    rt.block_on(async {
+        let client = match rt_api::AuthedClient::from_browser_cookie(&cookie).await {
+            Ok(c) => c,
+            Err(e) => {
+                println!("session build failed: {e}");
+                std::process::exit(1);
+            }
+        };
+        match client.playlists().await {
+            Ok(briefs) => {
+                println!("signed in. playlists: {}", briefs.len());
+                for b in briefs.iter().take(10) {
+                    println!("  {} ({})", b.title, b.track_count);
+                }
+                println!("PASS");
+            }
+            Err(e) => {
+                println!("playlist fetch failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    });
+}
+
+/// `bzvibs probe cookie <file>` — end-to-end browser-cookie sign-in check
+/// against the live API. The cookie is read from a file so it never
+/// appears in argv or shell history. Exercises the exact production path
+/// the UI uses: extract → validate → build → list playlists.
+fn cookie(path: &str) {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("cannot read {path}: {e}");
+            std::process::exit(2);
+        }
+    };
+    let Some(cookie) = rt_api::extract_cookie(&raw) else {
+        println!("nothing pasteable in that file");
+        std::process::exit(2);
+    };
+    if let Err(e) = rt_api::validate_cookie(&cookie) {
+        println!("cookie rejected: {e}");
+        std::process::exit(2);
+    }
+    println!("cookie looks right (SAPISID present); building session…");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    rt.block_on(async {
+        let client = match rt_api::AuthedClient::from_browser_cookie(&cookie).await {
+            Ok(c) => c,
+            Err(e) => {
+                println!("session build failed: {e}");
+                std::process::exit(1);
+            }
+        };
+        // Diagnostics: which authenticated calls distinguish a real
+        // session from a logged-out one. A bogus cookie silently yields
+        // an empty library, so "0 playlists" alone proves nothing.
+        for (name, result) in client.auth_probe().await {
+            match result {
+                Ok(n) => println!("  {name}: ok ({n})"),
+                Err(e) => println!("  {name}: ERR {e}"),
+            }
+        }
         match client.playlists().await {
             Ok(briefs) => {
                 println!("signed in. playlists: {}", briefs.len());

@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [workspace.dependencies]
@@ -13,6 +13,8 @@ rt-config = { path = "crates/rt-config" }
 rt-player = { path = "crates/rt-player" }
 rt-stream = { path = "crates/rt-stream" }
 rt-ui = { path = "crates/rt-ui" }
+tungstenite = "0.30"
+winreg = "0.56"
 
 [profile.release]
 lto = "thin"

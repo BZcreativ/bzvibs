@@ -1,6 +1,7 @@
 //! InnerTube client for YouTube Music. Wraps `ytmapi-rs` with the bootstrap
 //! workaround, an owned domain model, and the shared URL guard.
 
+pub mod browser_login;
 pub mod guard;
 pub mod model;
 pub mod oauth;

@@ -1,9 +1,9 @@
 # DPI-aware window capture: P/Invoke SetProcessDPIAware before GDI+ so
 # CopyFromScreen records true physical pixels, then save the target window
 # rect (also queried un-virtualized) to a PNG.
-# Usage: powershell -NoProfile -File capture_window.ps1 -ProcessName rustytube -Out path.png
+# Usage: powershell -NoProfile -File capture_window.ps1 -ProcessName bzvibs -Out path.png
 param(
-    [string]$ProcessName = "rustytube",
+    [string]$ProcessName = "bzvibs",
     [string]$Out = "E:\dev\bzvibs\dist\capture.png"
 )
 

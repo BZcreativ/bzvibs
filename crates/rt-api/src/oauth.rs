@@ -201,6 +201,48 @@ pub fn extract_cookie(text: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
+/// Cookie names the music session actually needs. Windows Credential
+/// Manager caps one secret at 2560 UTF-16 chars and a full YouTube jar
+/// (analytics, prefs, visitor ids, widevine…) overflows that; this
+/// curated set authenticates the InnerTube API and fits comfortably.
+const SESSION_COOKIES: [&str; 15] = [
+    "SAPISID",
+    "APISID",
+    "SID",
+    "HSID",
+    "SSID",
+    "SIDCC",
+    "__Secure-1PAPISID",
+    "__Secure-3PAPISID",
+    "__Secure-1PSID",
+    "__Secure-3PSID",
+    "__Secure-1PSIDTS",
+    "__Secure-3PSIDTS",
+    "__Secure-1PSIDCC",
+    "__Secure-3PSIDCC",
+    "LOGIN_INFO",
+];
+
+/// True when the cookie name participates in the music session.
+fn is_session_cookie(name: &str) -> bool {
+    SESSION_COOKIES.iter().any(|keep| *keep == name)
+}
+
+/// Trim a raw cookie header down to the session cookies. Used both for
+/// the credential we send the API and for the one we persist, so the
+/// Windows Credential Manager 2560-char secret limit cannot reject it.
+pub fn trim_to_session_cookies(header: &str) -> String {
+    header
+        .split(';')
+        .filter_map(|part| {
+            let part = part.trim();
+            let (name, value) = part.split_once('=')?;
+            is_session_cookie(name.trim()).then(|| format!("{}={}", name.trim(), value.trim()))
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 /// Cookies must carry SAPISID; without it signed requests are treated as
 /// logged out.
 pub fn validate_cookie(cookie: &str) -> Result<(), String> {
@@ -222,14 +264,134 @@ pub fn validate_cookie(cookie: &str) -> Result<(), String> {
     }
 }
 
+/// ytmapi reports a failed browser-session bootstrap as "Error parsing
+/// header." — true (the music.youtube.com scrape found no
+/// INNERTUBE_CLIENT_VERSION) but useless to a human holding a pasted
+/// cookie. Translate the common failures into the action that fixes them.
+fn humanize_browser_error(raw: String) -> String {
+    let lower = raw.to_ascii_lowercase();
+    if raw.contains("Error parsing header") {
+        "couldn't start a session with that cookie. Copy the full 'cookie' request \
+         header from music.youtube.com while signed in (it must contain SAPISID) \
+         and paste it again."
+            .to_string()
+    } else if lower.contains("error sending request")
+        || lower.contains("dns")
+        || lower.contains("connection")
+    {
+        "couldn't reach music.youtube.com — check the network and try again.".to_string()
+    } else {
+        raw
+    }
+}
+
+/// Client version reported by the live music.youtube.com shell on
+/// 2026-11-21. The API tolerates version drift; this only seeds the
+/// request context when the best-effort live scrape below cannot run.
+const FALLBACK_CLIENT_VERSION: &str = "1.20261117.06.00";
+
+/// The SAPISID value out of a cookie header, mirroring the parse ytmapi
+/// itself does. `SAPISID=` cannot match inside `__Secure-3PAPISID=`
+/// (the char before APISID there is 'P', not 'S').
+fn parse_sapisid(cookie: &str) -> Option<String> {
+    let after = cookie.split_once("SAPISID=")?.1;
+    let value = after.split_once(';').map_or(after, |(v, _)| v).trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+/// Best-effort live scrape of the client version. Any failure simply
+/// falls back to the pinned constant: the sign-in must not hinge on the
+/// homepage shell, which redirects and reshapes at will.
+async fn live_client_version() -> Option<String> {
+    const UA: &str =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0";
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok()?;
+    let page = client
+        .get("https://music.youtube.com/")
+        .header("User-Agent", UA)
+        .send()
+        .await
+        .ok()?
+        .text()
+        .await
+        .ok()?;
+    let after = page.split_once("INNERTUBE_CLIENT_VERSION\":\"")?.1;
+    let version = after.split_once('"')?.0;
+    (!version.is_empty()).then(|| version.to_string())
+}
+
 impl AuthedClient {
     /// Sign in with a browser session's cookie header. No Google Cloud
     /// project is involved, which is why this is the primary path.
+    ///
+    /// The token is assembled locally instead of via ytmapi's
+    /// `BrowserToken::from_str`: that path fetches music.youtube.com and
+    /// string-parses `INNERTUBE_CLIENT_VERSION` out of the page shell —
+    /// the same page-shell brittleness already worked around for
+    /// `NoAuthToken` (see `BOOTSTRAP_TOKEN_JSON`). A redirect, consent
+    /// wall or A/B shell change there must not fail a sign-in that holds
+    /// a perfectly good cookie; the credential proves itself on the first
+    /// API call (listing playlists), which is where a genuinely bad
+    /// cookie surfaces.
     pub async fn from_browser_cookie(cookie: &str) -> Result<Self, String> {
         validate_cookie(cookie)?;
-        let builder = YtMusicBuilder::new().with_browser_token_cookie(cookie.to_string());
-        let client = builder.build().await.map_err(|e| e.to_string())?;
-        Ok(AuthedClient::Browser(client))
+        // Send (and, via store_browser_cookie, persist) only the
+        // session cookies: a full jar overflows the Windows
+        // Credential Manager secret limit and carries nothing the
+        // InnerTube session needs.
+        let cookie = trim_to_session_cookies(cookie);
+        if !cookie.contains("SAPISID=") {
+            return Err(
+                "that cookie has SAPISID= but no value for it — copy the whole header again."
+                    .to_string(),
+            );
+        }
+        let sapisid = parse_sapisid(&cookie).ok_or_else(|| {
+            "that cookie has SAPISID= but no value for it — copy the whole header again."
+                .to_string()
+        })?;
+        let client_version =
+            live_client_version().await.unwrap_or_else(|| FALLBACK_CLIENT_VERSION.to_string());
+        // Field names are the private BrowserToken fields; the derived
+        // Deserialize constructs it exactly as from_str would have.
+        let token_json = serde_json::json!({
+            "sapisid": sapisid,
+            "client_version": client_version,
+            "cookies": cookie,
+        });
+        let token: ytmapi_rs::auth::browser::BrowserToken =
+            serde_json::from_value(token_json).map_err(|e| e.to_string())?;
+        // UFCS: the generic AuthToken build consumes the token without
+        // any network bootstrap.
+        let inner = YtMusicBuilder::<ytmapi_rs::auth::browser::BrowserToken>::build(
+            YtMusicBuilder::new().with_auth_token(token),
+        )
+        .map_err(|e| humanize_browser_error(e.to_string()))?;
+        // A cookie YouTube ignores still builds and "works": every library
+        // call silently returns empty, which the UI rendered as a signed-in
+        // account with zero playlists and an eternal "loading playlists…"
+        // line. The history response has a different shape when logged out
+        // (its parse fails with a missing-key error, verified live
+        // 2026-11-21), so that failure is the "not actually signed in"
+        // signal. Rare casualty: a genuinely empty history may parse the
+        // same way — the error message asks for a re-paste, not a bug
+        // report.
+        if let Err(e) = inner.get_history().await {
+            let text = e.to_string();
+            if text.contains("not found in Api response") {
+                return Err(
+                    "that cookie did not authenticate — YouTube treated it as signed out. \
+                     Copy the whole 'cookie' request header from music.youtube.com while \
+                     signed in and paste it again."
+                        .to_string(),
+                );
+            }
+            return Err(humanize_browser_error(text));
+        }
+        Ok(AuthedClient::Browser(inner))
     }
 
     pub fn new(token: OAuthToken) -> Result<Self, ApiError> {
@@ -237,6 +399,38 @@ impl AuthedClient {
         // UFCS: pick the sync build over the async bootstrap build.
         let inner = YtMusicBuilder::<OAuthToken>::build(builder)?;
         Ok(AuthedClient::OAuth(inner))
+    }
+
+    /// Diagnostics for `bzvibs probe cookie`: run a few authenticated
+    /// calls and report their outcomes. A logged-out session silently
+    /// returns empty library lists, so these separate a real session
+    /// from a cookie YouTube ignores.
+    pub async fn auth_probe(&self) -> Vec<(&'static str, Result<usize, String>)> {
+        async fn probe<T: ytmapi_rs::auth::LoggedIn>(
+            c: &YtMusic<T>,
+        ) -> Vec<(&'static str, Result<usize, String>)> {
+            vec![
+                (
+                    "history",
+                    c.get_history().await.map(|v| v.len()).map_err(|e| e.to_string()),
+                ),
+                (
+                    "library_artists",
+                    c.get_library_artists()
+                        .await
+                        .map(|v| v.len())
+                        .map_err(|e| e.to_string()),
+                ),
+                (
+                    "library_songs",
+                    c.get_library_songs().await.map(|v| v.len()).map_err(|e| e.to_string()),
+                ),
+            ]
+        }
+        match self {
+            AuthedClient::Browser(c) => probe(c).await,
+            AuthedClient::OAuth(c) => probe(c).await,
+        }
     }
 
     /// Sidebar briefs for the signed-in account's playlists.
@@ -310,23 +504,66 @@ const KEYRING_CLIENT_ID: &str = "oauth-client-id";
 const KEYRING_CLIENT_SECRET: &str = "oauth-client-secret";
 const KEYRING_COOKIE: &str = "browser-cookie";
 
-/// Persist a browser cookie header so the session restores on next launch.
+/// Fallback store for the session cookie when the OS credential store
+/// rejects it: `%LOCALAPPDATA%\bzvibs\session-cookie.txt`. The user
+/// profile directory is per-account and ACL-protected by Windows, which
+/// is a weaker guarantee than the credential manager but an honest one
+/// for a session credential that must exceed the manager's 2560-char
+/// secret limit after trimming.
+fn cookie_file() -> Option<std::path::PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .map(|base| base.join("bzvibs").join("session-cookie.txt"))
+}
+
+/// Persist a browser cookie header so the session restores on next
+/// launch. Only the session cookies are kept (see
+/// [`trim_to_session_cookies`]); if the credential store still refuses
+/// the value, it lands in the app-local fallback file instead — a live
+/// session must not be lost to a storage size limit.
 pub fn store_browser_cookie(cookie: &str) -> Result<(), StoreError> {
-    keyring::Entry::new(KEYRING_SERVICE, KEYRING_COOKIE)?.set_password(cookie.trim())?;
-    Ok(())
+    let trimmed = trim_to_session_cookies(cookie);
+    if trimmed.is_empty() {
+        return Err(StoreError::Custom("no session cookies in header".to_string()));
+    }
+    match keyring::Entry::new(KEYRING_SERVICE, KEYRING_COOKIE)
+        .and_then(|entry| entry.set_password(&trimmed))
+    {
+        Ok(()) => {
+            let _ = std::fs::remove_file(cookie_file().unwrap_or_default());
+            Ok(())
+        }
+        Err(e) => {
+            let path = cookie_file()
+                .ok_or_else(|| StoreError::Custom("no local app data directory".to_string()))?;
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&path, &trimmed)?;
+            eprintln!("[auth] credential store refused the cookie ({e}); using {path_display}", path_display = path.display());
+            Ok(())
+        }
+    }
 }
 
 pub fn load_browser_cookie() -> Option<String> {
-    keyring::Entry::new(KEYRING_SERVICE, KEYRING_COOKIE)
-        .ok()?
-        .get_password()
+    if let Some(cookie) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_COOKIE)
         .ok()
+        .and_then(|entry| entry.get_password().ok())
         .filter(|c| !c.trim().is_empty())
+    {
+        return Some(cookie);
+    }
+    let cookie = std::fs::read_to_string(cookie_file()?).ok()?;
+    (!cookie.trim().is_empty()).then(|| cookie.trim().to_string())
 }
 
 pub fn clear_browser_cookie() {
     if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_COOKIE) {
         let _ = entry.delete_credential();
+    }
+    if let Some(path) = cookie_file() {
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -364,6 +601,10 @@ pub enum StoreError {
     Keyring(#[from] keyring::Error),
     #[error("stored token parse: {0}")]
     Parse(#[from] serde_json::Error),
+    #[error("session store: {0}")]
+    Custom(String),
+    #[error("fallback file: {0}")]
+    File(#[from] std::io::Error),
 }
 
 /// Persist the token JSON in the OS credential store.
@@ -437,6 +678,26 @@ mod tests {
     }
 
     #[test]
+    fn trim_keeps_only_session_cookies() {
+        // The Windows credential store rejects secrets over 2560
+        // chars; a full YouTube jar overflows it, the curated session
+        // set must not.
+        let header = "YSC=abc; SAPISID=aa/bb; APISID=ap; SID=long1; HSID=h; SSID=s; \
+                      SIDCC=cc; __Secure-3PSID=p3; __Secure-1PAPISID=pa1; \
+                      PREF=f2b4; VISITOR_INFO1_LIVE=v; WID=w; LOGIN_INFO=li; NID=n";
+        let trimmed = trim_to_session_cookies(header);
+        assert!(trimmed.contains("SAPISID=aa/bb"), "{trimmed}");
+        assert!(trimmed.contains("__Secure-3PSID=p3"), "{trimmed}");
+        assert!(trimmed.contains("LOGIN_INFO=li"), "{trimmed}");
+        for dropped in ["YSC=", "PREF=", "VISITOR_INFO1_LIVE=", "WID=", "NID="] {
+            assert!(!trimmed.contains(dropped), "{trimmed}");
+        }
+        assert!(trimmed.len() < 2560);
+        // A header with none of the session cookies trims to nothing.
+        assert_eq!(trim_to_session_cookies("PREF=x; YSC=y"), "");
+    }
+
+    #[test]
     fn extract_cookie_handles_raw_header_and_curl_pastes() {
         let raw = "YSC=abc; SAPISID=xyz; __Secure-3PAPISID=def";
         assert_eq!(extract_cookie(raw).as_deref(), Some(raw));
@@ -462,5 +723,55 @@ mod tests {
         // Random text is rejected with instructions.
         let e = validate_cookie("hello world").unwrap_err();
         assert!(e.contains("F12"), "{e}");
+    }
+
+    #[test]
+    fn browser_bootstrap_errors_become_instructions() {
+        // ytmapi's "Error parsing header." verbatim helps nobody.
+        let e = humanize_browser_error("Error parsing header.".to_string());
+        assert!(e.contains("request header"), "{e}");
+        let e = humanize_browser_error(
+            "error sending request for url (https://music.youtube.com/)".to_string(),
+        );
+        assert!(e.contains("network"), "{e}");
+        // Anything else passes through untouched.
+        assert_eq!(humanize_browser_error("boom".to_string()), "boom");
+    }
+
+    #[test]
+    fn parse_sapisid_reads_the_real_cookie_not_the_3papisid() {
+        let c = "YSC=1; SAPISID=abc/xyz; __Secure-3PAPISID=other";
+        assert_eq!(parse_sapisid(c).as_deref(), Some("abc/xyz"));
+        // Value at the end of the header, without a trailing ';'.
+        assert_eq!(parse_sapisid("SAPISID=tail").as_deref(), Some("tail"));
+        // Empty value and the __Secure- namesake are not a SAPISID.
+        assert_eq!(parse_sapisid("SAPISID=;").as_deref(), None);
+        assert_eq!(parse_sapisid("__Secure-3PAPISID=only").as_deref(), None);
+    }
+
+    #[test]
+    fn injected_browser_token_carries_the_cookie_into_its_headers() {
+        // The serde-injection contract: these field names are
+        // BrowserToken's private fields. If a future ytmapi renames them,
+        // this breaks here — not inside a user's sign-in.
+        let token: ytmapi_rs::auth::browser::BrowserToken =
+            serde_json::from_value(serde_json::json!({
+                "sapisid": "aa/bb",
+                "client_version": "1.20261117.06.00",
+                "cookies": "YSC=1; SAPISID=aa/bb",
+            }))
+            .expect("field names still match BrowserToken");
+        use ytmapi_rs::auth::AuthToken as _;
+        let headers: Vec<_> = token.headers().expect("headers build").into_iter().collect();
+        let (_, cookie) = headers
+            .iter()
+            .find(|(k, _)| *k == "Cookie")
+            .expect("Cookie header present");
+        assert_eq!(cookie.as_ref(), "YSC=1; SAPISID=aa/bb");
+        let (_, auth) = headers
+            .iter()
+            .find(|(k, _)| *k == "Authorization")
+            .expect("Authorization header present");
+        assert!(auth.starts_with("SAPISIDHASH "), "got {auth}");
     }
 }

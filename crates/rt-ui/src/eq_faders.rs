@@ -74,9 +74,12 @@ fn band_under(bounds: &Rectangle, x: f32) -> Option<usize> {
 /// Only the track area (between the dB values and the frequency labels)
 /// starts a drag. Presses on the labels themselves or outside the widget
 /// are ignored — clicking the "250 Hz" caption must not yank that fader.
+/// The boundary is the track exactly, with no grace band: an earlier
+/// 6 px grace above the track made clicks in the dead zone under the dB
+/// values snap the fader to +12 dB.
 fn press_target(bounds: &Rectangle, cursor_abs: Point) -> Option<(usize, f32)> {
-    let top = bounds.y + TOP_PAD - 6.0;
-    let bottom = bounds.y + bounds.height - BOTTOM_PAD + 6.0;
+    let top = bounds.y + TOP_PAD;
+    let bottom = bounds.y + bounds.height - BOTTOM_PAD;
     if cursor_abs.y < top || cursor_abs.y > bottom {
         return None;
     }
@@ -322,6 +325,23 @@ mod tests {
         // Far above the widget entirely.
         let way_above = Point::new(band_center_x(&b, 3), b.y - 50.0);
         assert!(press_target(&b, way_above).is_none());
+    }
+
+    #[test]
+    fn the_track_boundary_is_exact_no_grace_band() {
+        // Regression: a 6 px grace above the track top let clicks in the
+        // dead zone between the dB values and the track snap to +12 dB.
+        let b = Rectangle::new(Point::new(267.0, 120.0), iced::Size::new(1290.0, 260.0));
+        let x = band_center_x(&b, 2);
+        // One pixel outside the track on either end: not a hit.
+        assert!(press_target(&b, Point::new(x, b.y + TOP_PAD - 1.0)).is_none());
+        assert!(press_target(&b, Point::new(x, b.y + b.height - BOTTOM_PAD + 1.0)).is_none());
+        // One pixel inside: a hit at full scale.
+        let (_, gain) = press_target(&b, Point::new(x, b.y + TOP_PAD + 1.0)).expect("hit");
+        assert!(gain > 11.0, "top of track is +12 dB, got {gain}");
+        let (_, gain) =
+            press_target(&b, Point::new(x, b.y + b.height - BOTTOM_PAD - 1.0)).expect("hit");
+        assert!(gain < -11.0, "bottom of track is -12 dB, got {gain}");
     }
 
     #[test]

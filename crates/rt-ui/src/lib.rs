@@ -74,6 +74,14 @@ pub enum Message {
     BrowserSignInDone(
         std::result::Result<(Arc<rt_api::AuthedClient>, Vec<rt_api::PlaylistBrief>), String>,
     ),
+    /// One-click flow: the login browser launched (or failed to).
+    BrowserLoginLaunched(std::result::Result<Arc<rt_api::browser_login::LoginBrowser>, String>),
+    /// One-click flow: the harvested cookie header (or why it never came).
+    BrowserLoginCookie(std::result::Result<String, String>),
+    /// User gave up on the one-click window.
+    BrowserLoginCancelled,
+    /// Show the manual paste / OAuth cards under the one-click card.
+    BrowserAdvancedToggled,
     OauthInsteadPressed,
     AuthSetupCancel,
     HelpToggled,
@@ -189,9 +197,14 @@ pub struct BzvibsApp {
     pub auth_loading: bool,
     /// OAuth client setup card: `Some((id, secret))` while it is open.
     pub auth_setup: Option<(String, String)>,
-    /// Cookie paste card: `Some(text)` while it is open. This is the
-    /// primary sign-in path (no Google Cloud project needed).
+    /// Cookie paste card: `Some(text)` while it is open (advanced path).
     pub browser_cookie: Option<String>,
+    /// The one-click sign-in card is open.
+    pub auth_open: bool,
+    /// Advanced options (manual paste / OAuth) shown under the card.
+    pub auth_advanced: bool,
+    /// Live one-click login browser while waiting for the user.
+    pub login_browser: Option<Arc<rt_api::browser_login::LoginBrowser>>,
     pub authed: Option<Arc<rt_api::AuthedClient>>,
     pub player: Option<PlayerHandle>,
     pub api: Option<Arc<ApiClient>>,
@@ -228,6 +241,9 @@ impl Default for BzvibsApp {
             auth_loading: false,
             auth_setup: None,
             browser_cookie: None,
+            auth_open: false,
+            auth_advanced: false,
+            login_browser: None,
             active_chip: 0,
             new_playlist: None,
             typing: false,
@@ -273,6 +289,26 @@ pub const STARTER_MIXES: [(&str, &str); 4] = [
 impl BzvibsApp {
     pub fn new() -> Self {
         BzvibsApp::default()
+    }
+
+    /// Connect with a cookie the user already proved (one-click harvest
+    /// or validated paste): build the session, persist the credential,
+    /// load playlists. Shared by both entry points so they cannot drift.
+    fn connect_with_cookie(&self, cookie: String) -> Task<Message> {
+        let stored = cookie.clone();
+        Task::perform(
+            async move {
+                let client = rt_api::AuthedClient::from_browser_cookie(&cookie).await?;
+                // Persist only after the credential proved usable.
+                if let Err(e) = rt_api::store_browser_cookie(&stored) {
+                    eprintln!("[auth] cookie store failed: {e}");
+                }
+                let client = Arc::new(client);
+                let playlists = client.playlists().await.map_err(|e| e.to_string())?;
+                Ok((client, playlists))
+            },
+            Message::BrowserSignInDone,
+        )
     }
 
     /// Boot with content already loading: the default query fills the stage
@@ -384,14 +420,66 @@ impl BzvibsApp {
                 );
             }
             Message::AuthStartPressed => {
-                if !matches!(self.auth, AuthState::SignedOut) {
+                if !matches!(self.auth, AuthState::SignedOut) || self.auth_loading {
                     return Task::none();
                 }
-                // Primary path: paste the browser session cookies. No
-                // Google Cloud project, no environment variables.
+                // One click: open the login browser; the user signs into
+                // Google inside it and the app picks the session up by
+                // itself. Manual paste and OAuth live behind Advanced.
+                self.auth_open = true;
+                self.auth_advanced = false;
                 self.auth_setup = None;
-                self.browser_cookie = Some(String::new());
+                self.browser_cookie = None;
                 self.status.error = None;
+                self.auth_loading = true;
+                return Task::perform(
+                    async move {
+                        rt_api::browser_login::open_login_browser().map(Arc::new)
+                    },
+                    Message::BrowserLoginLaunched,
+                );
+            }
+            Message::BrowserLoginLaunched(Ok(browser)) => {
+                self.login_browser = Some(browser.clone());
+                let waiting = browser;
+                return Task::perform(
+                    async move {
+                        waiting
+                            .wait_for_cookie(std::time::Duration::from_secs(300))
+                            .await
+                    },
+                    Message::BrowserLoginCookie,
+                );
+            }
+            Message::BrowserLoginLaunched(Err(e)) => {
+                eprintln!("[auth] login browser failed: {e}");
+                self.auth_loading = false;
+                self.status.error = Some(e);
+            }
+            Message::BrowserLoginCookie(Ok(cookie)) => {
+                // The wait loop only returns once SAPISID is in the jar,
+                // so the session is real; connect with it exactly like
+                // the manual paste path does.
+                self.login_browser = None;
+                return self.connect_with_cookie(cookie);
+            }
+            Message::BrowserLoginCookie(Err(e)) => {
+                eprintln!("[auth] one-click sign-in failed: {e}");
+                self.login_browser = None;
+                self.auth_loading = false;
+                self.status.error = Some(e);
+            }
+            Message::BrowserLoginCancelled => {
+                if let Some(browser) = self.login_browser.take() {
+                    browser.cancel();
+                }
+                self.auth_loading = false;
+            }
+            Message::BrowserAdvancedToggled => {
+                self.auth_advanced = !self.auth_advanced;
+                if self.auth_advanced && self.browser_cookie.is_none() {
+                    self.browser_cookie = Some(String::new());
+                }
             }
             Message::BrowserCookieChanged(v) => {
                 self.browser_cookie = Some(v);
@@ -403,6 +491,12 @@ impl BzvibsApp {
             Message::AuthSetupCancel => {
                 self.auth_setup = None;
                 self.browser_cookie = None;
+                self.auth_open = false;
+                self.auth_advanced = false;
+                if let Some(browser) = self.login_browser.take() {
+                    browser.cancel();
+                }
+                self.auth_loading = false;
             }
             Message::BrowserSignInPressed => {
                 let raw = self.browser_cookie.clone().unwrap_or_default();
@@ -416,24 +510,13 @@ impl BzvibsApp {
                 }
                 self.auth_loading = true;
                 self.status.error = None;
-                let stored = cookie.clone();
-                return Task::perform(
-                    async move {
-                        let client = rt_api::AuthedClient::from_browser_cookie(&cookie).await?;
-                        // Persist only after the credential proved usable.
-                        if let Err(e) = rt_api::store_browser_cookie(&stored) {
-                            eprintln!("[auth] cookie store failed: {e}");
-                        }
-                        let client = Arc::new(client);
-                        let playlists = client.playlists().await.map_err(|e| e.to_string())?;
-                        Ok((client, playlists))
-                    },
-                    Message::BrowserSignInDone,
-                );
+                return self.connect_with_cookie(cookie);
             }
             Message::BrowserSignInDone(Ok((client, playlists))) => {
                 self.auth_loading = false;
                 self.browser_cookie = None;
+                self.auth_open = false;
+                self.auth_advanced = false;
                 self.authed = Some(client);
                 self.auth = AuthState::SignedIn { playlists };
                 self.status.error = None;
@@ -513,6 +596,8 @@ impl BzvibsApp {
                 self.authed = Some(client);
                 self.auth = AuthState::SignedIn { playlists };
                 self.auth_session = None;
+                self.auth_open = false;
+                self.auth_advanced = false;
                 self.status.error = None;
             }
             Message::AuthCompleted(Err(e)) => {

@@ -1,6 +1,6 @@
 //! DPI ground-truth probe: prints what the window system reports to a
 //! process launched from this same shell as the app. Run:
-//! `cargo run -p rustytube --example dpi_probe --release`
+//! `cargo run -p bzvibs --example dpi_probe --release`
 
 fn main() {
     #[cfg(windows)]

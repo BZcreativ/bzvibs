@@ -1,5 +1,5 @@
 [package]
-name = "rustytube"
+name = "bzvibs"
 version.workspace = true
 edition.workspace = true
 
@@ -12,7 +12,7 @@ rt-ui.workspace = true
 tokio = { version = "1", features = ["rt", "net", "time"] }
 
 [[bin]]
-name = "rustytube"
+name = "bzvibs"
 path = "src/main.rs"
 
 [dev-dependencies]

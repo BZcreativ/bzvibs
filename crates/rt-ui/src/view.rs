@@ -219,11 +219,13 @@ fn sidebar(app: &BzvibsApp) -> Element<'static, Message> {
         }
         AuthState::SignedIn { playlists } => {
             auth_col = auth_col.push(text("● Signed in").size(11).color(p.accent));
+            let mut list = column![].spacing(4);
             if playlists.is_empty() {
-                auth_col = auth_col.push(text("  loading playlists…").size(11).color(p.text_dim));
+                // Honest copy: sign-in already verified the session, so
+                // empty really means empty — not "still loading".
+                list = list.push(text("  no playlists yet").size(11).color(p.text_dim));
             }
-            let mut n_shown = 0usize;
-            for pl in playlists.iter().take(8) {
+            for pl in playlists.iter() {
                 let id = pl.id.clone();
                 let title = pl.title.clone();
                 let pl_btn = button(
@@ -249,16 +251,15 @@ fn sidebar(app: &BzvibsApp) -> Element<'static, Message> {
                     text_color: p.text,
                     ..button::Style::default()
                 });
-                auth_col = auth_col.push(pl_btn);
-                n_shown += 1;
+                list = list.push(pl_btn);
             }
-            if playlists.len() > n_shown {
-                auth_col = auth_col.push(
-                    text(format!("  …and {} more", playlists.len() - n_shown))
-                        .size(10)
-                        .color(p.text_dim),
-                );
-            }
+            // The auth column flexes to the sidebar's leftover height so
+            // only the playlist rows scroll; "● Signed in" above and
+            // Disconnect below stay pinned.
+            auth_col =
+                auth_col
+                    .height(Fill)
+                    .push(scrollable(list).width(Fill).height(Fill));
             let disconnect = button(text("Disconnect".to_string()).size(11))
                 .on_press(Message::AuthDisconnectPressed)
                 .padding([4, 10])
@@ -302,6 +303,7 @@ fn sidebar(app: &BzvibsApp) -> Element<'static, Message> {
         .spacing(10)
         .padding(16)
         .width(Fill)
+        .height(Fill)
         .into()
 }
 
@@ -611,7 +613,9 @@ fn library_stage(app: &BzvibsApp) -> Element<'static, Message> {
             .into()
         }
         _ => {
-            let mut col = column![
+            // The sign-in cards themselves mount in `stage`, so they show
+            // on every section; this arm keeps the prompt and the button.
+            column![
                 text("Library").size(24).color(p.text),
                 text("Sign in to see your saved playlists and liked music.")
                     .size(12)
@@ -629,20 +633,94 @@ fn library_stage(app: &BzvibsApp) -> Element<'static, Message> {
                 ),
             ]
             .spacing(14)
-            .padding(24);
-            if app.browser_cookie.is_some() {
-                col = col.push(browser_cookie_card(app));
-            }
-            if app.auth_setup.is_some() {
-                col = col.push(oauth_setup_card(app));
-            }
-            col.into()
+            .padding(24)
+            .into()
         }
     }
 }
 
-/// Primary sign-in: paste the browser session's cookie header. This is the
-/// method that needs no Google Cloud project, so it is the default path.
+/// The one sign-in flow a user should ever need: click, a browser window
+/// opens on music.youtube.com, sign into Google there like on any
+/// website, and the app harvests the session and connects by itself.
+/// Manual cookie paste and OAuth hide behind Advanced for edge cases.
+fn google_login_card(app: &BzvibsApp) -> Element<'static, Message> {
+    let p = theme::at(app.theme_index);
+
+    let status: Element<'static, Message> = if app.login_browser.is_some() {
+        text(
+            "The sign-in window is open. Sign in with your Google account inside it, \
+             then close that window — bzvibs connects by itself from there. \
+             Nothing to copy.",
+        )
+        .size(12)
+        .color(p.accent)
+        .into()
+    } else if app.auth_loading {
+        text("Opening the sign-in window…").size(12).color(p.text_dim).into()
+    } else {
+        text(
+            "Click below: your browser opens, you sign in with your Google \
+             account as usual and close the window — bzvibs connects \
+             automatically.",
+        )
+        .size(12)
+        .color(p.text_dim)
+        .into()
+    };
+
+    let mut actions = row![].spacing(8);
+    if app.login_browser.is_some() {
+        actions = actions.push(text_button(
+            p,
+            "Cancel".into(),
+            ButtonKind::Ghost,
+            true,
+            Message::BrowserLoginCancelled,
+        ));
+    } else {
+        actions = actions.push(text_button(
+            p,
+            "Sign in with Google".into(),
+            ButtonKind::Primary,
+            !app.auth_loading,
+            Message::AuthStartPressed,
+        ));
+        actions = actions.push(text_button(
+            p,
+            if app.auth_advanced {
+                "Hide advanced".to_string()
+            } else {
+                "Advanced options".to_string()
+            },
+            ButtonKind::Ghost,
+            true,
+            Message::BrowserAdvancedToggled,
+        ));
+    }
+
+    let card = column![
+        text("Sign in with Google").size(16).color(p.text),
+        status,
+        actions,
+    ]
+    .spacing(10)
+    .padding(18);
+
+    container(card)
+        .width(Length::Fixed(520.0))
+        .style(move |_t| container::Style {
+            background: Some(Background::Color(p.bg_card)),
+            border: Border {
+                radius: 14.0.into(),
+                color: p.accent,
+                width: 1.0,
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// Advanced path: paste the browser session's cookie header by hand.
 fn browser_cookie_card(app: &BzvibsApp) -> Element<'static, Message> {
     let p = theme::at(app.theme_index);
     let value = app.browser_cookie.clone().unwrap_or_default();
@@ -899,7 +977,11 @@ fn stage_inner(app: &BzvibsApp) -> Element<'static, Message> {
     col.into()
 }
 
-/// Section dispatch plus the New playlist dialog overlay.
+/// Section dispatch plus the overlays: sign-in cards, New playlist dialog,
+/// help. The sign-in cards mount here — not inside Library — because the
+/// sidebar "Sign in with Google" pill is present on every section; when the
+/// cards only rendered in Library, pressing the pill anywhere else set
+/// state that no stage displayed and the button looked dead.
 fn stage(app: &BzvibsApp) -> Element<'static, Message> {
     let base = match app.section {
         Section::Equalizer => eq_stage(app),
@@ -908,13 +990,23 @@ fn stage(app: &BzvibsApp) -> Element<'static, Message> {
         Section::Library => library_stage(app),
         Section::Home => stage_inner(app),
     };
+    let mut page = column![base].spacing(8);
+    if app.auth_open {
+        page = page.push(google_login_card(app));
+    }
+    if app.auth_open && app.auth_advanced && app.browser_cookie.is_some() {
+        page = page.push(browser_cookie_card(app));
+    }
+    if app.auth_setup.is_some() {
+        page = page.push(oauth_setup_card(app));
+    }
     if app.help_open {
-        return column![base, help_overlay(app)].spacing(8).into();
+        page = page.push(help_overlay(app));
     }
     if app.new_playlist.is_some() {
-        return column![base, new_playlist_dialog(app)].spacing(8).into();
+        page = page.push(new_playlist_dialog(app));
     }
-    base
+    page.into()
 }
 
 fn help_overlay(app: &BzvibsApp) -> Element<'static, Message> {
